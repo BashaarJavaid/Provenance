@@ -46,7 +46,7 @@ Two pipelines, one shape. Both consume typed objects, both read the registry liv
 Every state-mutating proposal passes through these stages in order; the earliest terminal outcome wins:
 
 1. **Schema validation** — the typed action's `action_class` must exist in the tool registry, its target must exist in the entity model, and its declared fields must validate against the tool schema. A fabricated tool, a nonexistent target, or free-form text is rejected mechanically (§7.1).
-2. **Identity** — the proposing agent's identity is resolved via PortunusMCP's identity broker (short-lived per-agent credentials, no shared service accounts).
+2. **Identity** — the proposing agent presents a short-lived credential: an ECDSA-signed assertion `(agent_id, agent_version, issued_at, expires_at)` minted by the registry and verified here against the agent's registered `public_key`. Signature or expiry failure is a terminal denial. No shared service accounts. Minting and verification are new code in this repo, built on PortunusMCP's `signing` primitives; Portunus's own identity broker (static API keys, HMAC) is not used.
 3. **Registry read (request-time)** — identity, version, tool scope, standing. An agent with `standing: DEGRADED` has every proposal held for human approval regardless of risk score; `SUSPENDED` is denied outright.
 4. **RBAC/ABAC** — is this action class within this agent's declared tool scope?
 5. **Deterministic risk scoring** — the table lookup in §4.2. Never a model opinion.
@@ -236,7 +236,7 @@ Source of truth for identity, version, tool scope, memory-domain authority, and 
 
 ### 5.7 Agent Gateway **[CODE]** — built on PortunusMCP primitives
 
-Identity → RBAC/ABAC → deterministic risk table → sign → approve / hold-for-human / deny (§2.1). Architecturally the only path from any agent to a state-mutating action. PortunusMCP is consumed as a library dependency for identity, RBAC/ABAC, and ECDSA signing (see [`docs/adr/ADR-004`](./docs/adr/ADR-004-portunusmcp-as-library.md)); the risk table, typed-action fields, registry-standing reads, and hold/resume path are new code in this repo.
+Identity → RBAC/ABAC → deterministic risk table → sign → approve / hold-for-human / deny (§2.1). Architecturally the only path from any agent to a state-mutating action. PortunusMCP is consumed as a library dependency for three modules only — `signing` (ECDSA), `abac` (condition grammar), `decision` (typed models) — see [`docs/adr/ADR-004`](./docs/adr/ADR-004-portunusmcp-as-library.md) and the item-0.5 done-note in [`ROADMAP.md`](./ROADMAP.md); identity resolution and credential minting, the risk table, typed-action fields, registry-standing reads, and hold/resume path are new code in this repo.
 
 ### 5.8 Verification Agent **[LLM]** — Gemini 3.5 Flash
 
