@@ -177,7 +177,19 @@ gcloud auth login && gcloud auth application-default login
 Live: **https://provenance-808273007560.us-central1.run.app** (`/health` for the service
 state). The service is public and runs at `min-instances=0`, so it bills nothing idle.
 
-*The seed script and judge credentials land with later phases — see [`ROADMAP.md`](./ROADMAP.md).*
+**Seed the synthetic company** — the entity model every incident recurs over:
+
+```bash
+GOOGLE_CLOUD_PROJECT=provenance-hackathon .venv/bin/python scripts/seed_firestore.py
+```
+
+Idempotent: a re-run leaves existing documents untouched, so it never clobbers state a
+demo take has already changed. `--reset` rewrites every document back to the baseline —
+`inventory-api` on v42 over a known-good v41, nominal error rates, every fault switch off —
+which is the between-takes reset for rehearsal. It reads all 26 documents back and exits
+non-zero if any is missing or does not match the fixture.
+
+*Judge credentials land with later phases — see [`ROADMAP.md`](./ROADMAP.md).*
 
 ## Run the demo
 

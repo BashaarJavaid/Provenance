@@ -10,3 +10,4 @@ One file per consequential architecture decision. Load the specific ADR relevant
 - [`ADR-006-gemma-sanitizer-isolation.md`](./ADR-006-gemma-sanitizer-isolation.md) — Untrusted content sanitized by isolated Gemma, never raw to a frontier model
 - [`ADR-007-adk-orchestration-park-resume.md`](./ADR-007-adk-orchestration-park-resume.md) — ADK Graph Runtime orchestration; Task API for the park/resume approval path
 - [`ADR-008-one-cloud-run-service.md`](./ADR-008-one-cloud-run-service.md) — One Cloud Run service, our own Dockerfile, no UI framework (vs `adk deploy cloud_run`, vs a Node toolchain)
+- [`ADR-009-synthetic-company-collections.md`](./ADR-009-synthetic-company-collections.md) — Typed Firestore collections for the synthetic company; the fault switch is data, not deploy config

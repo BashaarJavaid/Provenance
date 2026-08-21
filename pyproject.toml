@@ -34,6 +34,11 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.14",
     "mypy>=1.18",
+    # The synthetic-company seed (ROADMAP item 4). Not a google-adk transitive dep, and
+    # dev-only for now: the sole importer is scripts/seed_firestore.py, and scripts/ is in
+    # .gcloudignore so none of it ships in the Cloud Run image. Moves to [project]
+    # dependencies in item 5, when the registry reads Firestore from inside provenance/.
+    "google-cloud-firestore>=2.21,<3",
 ]
 
 [tool.setuptools.packages.find]
