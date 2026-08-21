@@ -178,7 +178,7 @@ gcloud auth login && gcloud auth application-default login
 
 | Layer | Choice | One-sentence justification |
 |---|---|---|
-| Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst. Gemini 3.5 Pro is not served to this project (verified by probe — see `ROADMAP.md` item 1); the model is a config string per role, not a design assumption |
+| Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst. Gemini 3.5 Pro does not exist — Google's 3.x line is Flash-first and its only Pro-tier entry is a preview model (see `ROADMAP.md` item 1); the model is a config string per role, not a design assumption |
 | Verification | Gemini 3.5 Flash | High-throughput, lower-stakes three-valued verdicts |
 | Sanitization | Gemma 4 (Vertex AI Model Garden) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
 | Inline guardrails | Model Armor | The managed screening service the track brief names; used honestly as a filter, never as the boundary |
