@@ -54,6 +54,7 @@ Built so far; this section grows as ROADMAP phases land (update to reality as co
 - `.venv/bin/ruff check .` — lint
 - `.venv/bin/ruff format --check .` — formatting (fix with `ruff format .`)
 - `.venv/bin/mypy provenance/` — strict type-check
+- `./scripts/set_budget.sh` — the $300 billing budget with 50/90/100% alerts; idempotent (already run)
 - `./scripts/gcp_setup.sh` — GCP project, APIs, Firestore, and a live Gemini 3.5 access probe; idempotent. `PROJECT_ID` / `REGION` override the defaults (`provenance-hackathon`, `us-central1`)
 - CI (`.github/workflows/ci.yml`) runs lint, format, type-check, and tests on push/PR — no cloud credentials
 
@@ -63,6 +64,16 @@ Still to come:
 - Cloud Run deploy — one command from a clean checkout (Phase 1, item 3)
 - Incident trigger / fault-injection scripts (Phase 3 / Phase 5)
 - `--memory-disabled` counterfactual A/B runner (Phase 11)
+
+## Cost ceiling
+
+The GCP project runs on a **$300 free-trial credit and must not exceed it**, and the hosted demo has to stay alive through **October 1** judging. Trial credit also expires ~90 days after activation, so unspent credit is not banked. Treat the ceiling as a design constraint, not something to audit afterwards — billing data lags up to a day, so by the time a number looks wrong the money is already gone.
+
+- **Before adding any paid resource** — a deployed model endpoint, a Cloud Run service with `min-instances > 0`, a scheduled job, anything with a GPU — state what it costs per hour and whether it bills **while idle**. Idle-billing resources are the only things that can realistically drain the credit.
+- **The single largest risk is the Gemma 4 sanitizer** (`docs/adr/ADR-006`, Phase 8). A dedicated Vertex endpoint bills by the hour whether or not it serves a request — order $1–4/hr, which is the entire credit in under two weeks of being left up. Deploy it only while that beat is being built or recorded, and undeploy immediately after. Never leave it running overnight.
+- **Cloud Run stays `min-instances=0`** with a low `max-instances`. Scale-to-zero is the default posture; an always-warm instance is a deliberate, justified exception, not a convenience.
+- **Token spend is not the risk; loops are.** A Gemini call costs cents; an agent looping on one costs whatever it can reach. The bounded retry (Phase 5, item 20) and the escalation path are cost controls as much as correctness ones.
+- **The backstop is a budget, not a habit.** `scripts/set_budget.sh` configures a $300 Cloud Billing budget with alerts at 50/90/100%. Alerts notify, they do not stop spend — the four rules above are the actual guardrail.
 
 ## Current phase
 
