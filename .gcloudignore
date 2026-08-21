@@ -1,0 +1,17 @@
+# Keeps `gcloud run deploy --source .` from uploading the build context's dead weight —
+# .venv alone is hundreds of megabytes. The Dockerfile COPYs only what it needs, but the
+# upload happens first.
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+docs/
+scripts/
+tests/
+.cursor/
+*.md

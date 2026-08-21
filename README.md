@@ -161,14 +161,23 @@ python3.12 -m venv .venv
 
 The second install is separate on purpose: `portunusmcp` pins `fastapi==0.115.6`, which pip would silently downgrade out of `google-adk`'s supported range rather than reporting a conflict. `pip check` therefore exits non-zero in this environment by design, and CI does not gate on it.
 
-**Google Cloud** (project, APIs, Firestore, and a live Gemini 3.5 access probe):
+**Google Cloud** (project, APIs, IAM, Firestore, and a live Gemini access probe):
 
 ```bash
 gcloud auth login && gcloud auth application-default login
 ./scripts/gcp_setup.sh     # idempotent; PROJECT_ID and REGION override the defaults
 ```
 
-*The hosted demo URL, seed script, and judge credentials land with later phases — see [`ROADMAP.md`](./ROADMAP.md).*
+**Deploy** — one command from a clean checkout, and it checks its own result:
+
+```bash
+./scripts/deploy.sh        # PROJECT_ID, REGION and SERVICE override the defaults
+```
+
+Live: **https://provenance-808273007560.us-central1.run.app** (`/health` for the service
+state). The service is public and runs at `min-instances=0`, so it bills nothing idle.
+
+*The seed script and judge credentials land with later phases — see [`ROADMAP.md`](./ROADMAP.md).*
 
 ## Run the demo
 
@@ -183,10 +192,11 @@ gcloud auth login && gcloud auth application-default login
 | Sanitization | Gemma 4 (Vertex AI Model Garden) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
 | Inline guardrails | Model Armor | The managed screening service the track brief names; used honestly as a filter, never as the boundary |
 | Orchestration | Google ADK 2.0 | Graph Runtime for workflow routing; Task API for delegation and the parked-on-human-approval resume path |
+| HTTP surface | FastAPI (already a `google-adk` dependency) | One service serves the gateway and the UI shell; the shell is a single static file with no build step (`docs/adr/ADR-008`) |
 | Identity / gateway | PortunusMCP (library dependency) | RBAC/ABAC primitives and ECDSA signing, consumed like an off-the-shelf auth library; all track-facing authorization logic is new code here |
 | Memory store | Firestore | Entity-keyed reads and append-only versioned writes are exactly what a document store is for |
 | Recall index | Vertex AI embeddings | Retrieval nominates candidate beliefs; the store decides what is true |
-| Deployment | Cloud Run | Gateway, orchestrator, sweeper, and UI — stood up in Phase 1, not at the end |
+| Deployment | Cloud Run | Stood up in Phase 1, not at the end — one service today, split only when a component needs its own scaling profile (`docs/adr/ADR-008`) |
 | Observability | OpenTelemetry → Cloud Trace/Logging | One structured stream every component emits to from day one; the UI, audit log, and counterfactual metrics all read it |
 
 ## Documentation

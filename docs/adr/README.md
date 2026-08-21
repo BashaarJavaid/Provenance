@@ -9,3 +9,4 @@ One file per consequential architecture decision. Load the specific ADR relevant
 - [`ADR-005-recall-index-nominates-store-decides.md`](./ADR-005-recall-index-nominates-store-decides.md) — Recall: the embedding index nominates, the belief store decides (vs plain RAG)
 - [`ADR-006-gemma-sanitizer-isolation.md`](./ADR-006-gemma-sanitizer-isolation.md) — Untrusted content sanitized by isolated Gemma, never raw to a frontier model
 - [`ADR-007-adk-orchestration-park-resume.md`](./ADR-007-adk-orchestration-park-resume.md) — ADK Graph Runtime orchestration; Task API for the park/resume approval path
+- [`ADR-008-one-cloud-run-service.md`](./ADR-008-one-cloud-run-service.md) — One Cloud Run service, our own Dockerfile, no UI framework (vs `adk deploy cloud_run`, vs a Node toolchain)

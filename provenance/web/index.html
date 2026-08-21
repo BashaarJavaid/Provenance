@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provenance</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #262c36;
+    --fg: #e6edf3; --dim: #8b949e; --ok: #3fb950; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.5rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  main { max-width: 62rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0; letter-spacing: -0.01em; }
+  .claim { color: var(--dim); margin: 0.4rem 0 0; max-width: 46rem; }
+  .bar { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  #health {
+    font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
+    border: 1px solid var(--line); border-radius: 99px; padding: 0.4rem 0.7rem;
+  }
+  #health::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--dim); margin-right: 0.5rem; vertical-align: baseline;
+  }
+  #health.up::before { background: var(--ok); }
+  #health.down::before { background: var(--bad); }
+  .grid {
+    display: grid; gap: 1rem; margin-top: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 1rem 1.1rem; min-height: 8.5rem;
+  }
+  h2 { font-size: 0.95rem; margin: 0 0 0.35rem; }
+  section p { color: var(--dim); font-size: 0.85rem; margin: 0; }
+  .pending {
+    display: block; margin-top: 0.9rem; color: var(--dim); opacity: 0.75;
+    font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  footer { margin-top: 2rem; color: var(--dim); font-size: 0.8rem; }
+</style>
+
+<main>
+  <div class="bar">
+    <h1>Provenance</h1>
+    <span id="health">checking…</span>
+  </div>
+  <p class="claim">
+    A fleet of agents that detects, diagnoses, fixes, and verifies enterprise incidents,
+    and writes what it confirmed into a governed institutional memory. An LLM never decides
+    what the organization does, and never decides what the organization believes.
+  </p>
+
+  <div class="grid">
+    <section>
+      <h2>Live fleet view</h2>
+      <p>Agents, current state, and which belief each one is reading.</p>
+      <span class="pending">awaiting item 11 · phase 3</span>
+    </section>
+    <section>
+      <h2>Gateway ledger</h2>
+      <p>Every authorization with its risk breakdown by component, signed — denials included.</p>
+      <span class="pending">awaiting item 11 · phase 3</span>
+    </section>
+    <section>
+      <h2>Belief inspector</h2>
+      <p>Evidence, computed confidence and the arithmetic behind it, supersession chain, decay clock.</p>
+      <span class="pending">awaiting item 17 · phase 4</span>
+    </section>
+    <section>
+      <h2>Registry panel</h2>
+      <p>Agent standing, live, so a DEGRADED transition is visible the instant it happens.</p>
+      <span class="pending">awaiting item 28 · phase 8</span>
+    </section>
+    <section>
+      <h2>Approval card</h2>
+      <p>Every HOLD in plain language for a non-engineer — generated from the risk table, never from a model.</p>
+      <span class="pending">awaiting item 31 · phase 10</span>
+    </section>
+    <section>
+      <h2>Counterfactual panel</h2>
+      <p>The measured memory-on / memory-off A/B for incident #2.</p>
+      <span class="pending">awaiting item 32 · phase 11</span>
+    </section>
+  </div>
+
+  <footer>
+    Six surfaces, one OpenTelemetry stream (<code>ARCHITECTURE.md</code> §8.2).
+    This shell is the deployed skeleton from roadmap item 3; later items fill the regions.
+  </footer>
+</main>
+
+<script>
+  async function poll() {
+    const el = document.getElementById("health");
+    try {
+      const r = await fetch("/health", { cache: "no-store" });
+      const h = await r.json();
+      el.className = "up";
+      el.textContent = `ok · v${h.version} · trace ${h.tracing ? "on" : "off"}`;
+    } catch {
+      el.className = "down";
+      el.textContent = "unreachable";
+    }
+  }
+  poll();
+  setInterval(poll, 15000);
+</script>
