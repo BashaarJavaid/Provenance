@@ -21,6 +21,11 @@ dependencies = [
     # here because we import them, with ADK's own ranges so the two can never conflict.
     "fastapi>=0.133,<1",
     "uvicorn>=0.34,<1",
+    # The agent registry (ROADMAP item 5). Dev-only through item 4, when the sole importer
+    # was scripts/seed_firestore.py; provenance/registry.py now reads Firestore from inside
+    # the package, so it has to ship in the Cloud Run image. Not a google-adk transitive
+    # dep — it was not installed at all before item 4.
+    "google-cloud-firestore>=2.21,<3",
 ]
 
 # portunusmcp is deliberately NOT listed here. It pins fastapi==0.115.6, which pip
@@ -34,11 +39,6 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.14",
     "mypy>=1.18",
-    # The synthetic-company seed (ROADMAP item 4). Not a google-adk transitive dep, and
-    # dev-only for now: the sole importer is scripts/seed_firestore.py, and scripts/ is in
-    # .gcloudignore so none of it ships in the Cloud Run image. Moves to [project]
-    # dependencies in item 5, when the registry reads Firestore from inside provenance/.
-    "google-cloud-firestore>=2.21,<3",
 ]
 
 [tool.setuptools.packages.find]

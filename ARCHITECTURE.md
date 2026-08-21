@@ -133,7 +133,9 @@ Agent {
 }
 ```
 
-**Standing is earned and lost.** Three rejected memory writes lacking verifiable evidence inside the rolling window → standing drops to `DEGRADED`. A `DEGRADED` agent's proposals require human approval **regardless of risk score**, and its memory writes are rejected outright. Restoration requires explicit human reinstatement; the system never quietly forgives. This closes the loop on the poisoning attack: repeated attempts *change what that agent is permitted to do*.
+**Standing is earned and lost.** Three rejected memory writes lacking verifiable evidence inside the rolling window → standing drops to `DEGRADED`. The window is **3 rejections inside 24 hours** (`registry.REJECTION_THRESHOLD` / `registry.REJECTION_WINDOW_HOURS`); each `rejection_window` entry carries `rejected_at` and `reason`, so the counter is the list's length and the panel can show the cause. A `DEGRADED` agent's proposals require human approval **regardless of risk score**, and its memory writes are rejected outright. Restoration requires explicit human reinstatement; the system never quietly forgives. This closes the loop on the poisoning attack: repeated attempts *change what that agent is permitted to do*.
+
+Stored as one flat document per agent at `agents/{id}`, with `version` as a field, read fresh on every authorization (§1.1 property 4). The stored `standing` is authoritative — it is never recomputed from `rejection_window`, because `SUSPENDED` is not derivable from rejections and reinstatement needs a field a human can set. Item 14's Policy Engine writes `DEGRADED`; a human writes the rest. Schema reasoning in `docs/adr/ADR-010`.
 
 ## 4. The determinism boundary
 

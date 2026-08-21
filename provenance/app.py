@@ -4,9 +4,11 @@
 UI (item 11), the approval queue (item 30), and the cold-visitor test (item 36) all
 assume a live URL to build on. This module is that URL and nothing more.
 
-Deliberately absent: any action endpoint, any auth, any Firestore read. The gateway is a
-*pipeline* (§2.1), not an endpoint, and the typed Action it carries does not exist until
-item 6 — an endpoint stub now would be a request shape invented ahead of its object.
+Deliberately absent: any action endpoint and any auth. The gateway is a *pipeline* (§2.1),
+not an endpoint, and the typed Action it carries does not exist until item 6 — an endpoint
+stub now would be a request shape invented ahead of its object. `provenance/registry.py`
+(item 5) does read Firestore, but from the request path, not from here: no route in this
+module touches the database, and the registry panel §8.2 describes is item 11's.
 ADK routes and delegates; it does not serve this app (`docs/adr/ADR-007`, ADR-008).
 """
 
