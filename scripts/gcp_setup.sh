@@ -48,6 +48,16 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   --role='roles/cloudbuild.builds.builder' --condition=None --quiet >/dev/null
 
+# The same account is the Cloud Run *runtime* identity, and from ROADMAP item 5 the
+# service reads the agent registry from Firestore on every authorization (ARCHITECTURE
+# §1.1 property 4). Without this the registry read fails closed in production and every
+# proposal is denied. datastore.user is read+write on Firestore Native; there is no
+# narrower predefined role that still permits the standing write.
+echo "--> granting the Firestore role to ${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role='roles/datastore.user' --condition=None --quiet >/dev/null
+
 if gcloud firestore databases describe --database='(default)' \
      --project="${PROJECT_ID}" >/dev/null 2>&1; then
   echo "--> Firestore '(default)' already exists"
