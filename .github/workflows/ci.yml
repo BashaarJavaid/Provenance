@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "item-*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Two steps, deliberately. portunusmcp pins fastapi==0.115.6 and pip would
+      # silently downgrade google-adk's fastapi/starlette rather than erroring.
+      # `pip check` exits non-zero in the resulting environment by design and is
+      # NOT run here. See ROADMAP.md item 0.5.
+      - run: pip install -e ".[dev]"
+      - run: pip install --no-deps portunusmcp==0.1.0
+
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy provenance/
+      - run: pytest

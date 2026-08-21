@@ -150,7 +150,25 @@ Full detail, including the assumptions the model rests on, in [`THREAT_MODEL.md`
 
 ## Quickstart
 
-*To be filled in as build phases complete (deployed Cloud Run service lands in Phase 1 — see [`ROADMAP.md`](./ROADMAP.md)). Will include: GCP project setup, local dev setup, seed script for the synthetic company, and the hosted demo URL with judge credentials.*
+**Local dev** (Python 3.12):
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install --no-deps portunusmcp==0.1.0   # mandatory second step — see below
+.venv/bin/pytest
+```
+
+The second install is separate on purpose: `portunusmcp` pins `fastapi==0.115.6`, which pip would silently downgrade out of `google-adk`'s supported range rather than reporting a conflict. `pip check` therefore exits non-zero in this environment by design, and CI does not gate on it.
+
+**Google Cloud** (project, APIs, Firestore, and a live Gemini 3.5 access probe):
+
+```bash
+gcloud auth login && gcloud auth application-default login
+./scripts/gcp_setup.sh     # idempotent; PROJECT_ID and REGION override the defaults
+```
+
+*The hosted demo URL, seed script, and judge credentials land with later phases — see [`ROADMAP.md`](./ROADMAP.md).*
 
 ## Run the demo
 

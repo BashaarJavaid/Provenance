@@ -47,13 +47,18 @@ Further conventions:
 
 ## Commands
 
-Nothing is built yet; this section grows as ROADMAP phases land. Planned from day one (update to reality as they're created):
+Built so far; this section grows as ROADMAP phases land (update to reality as commands are created):
 
 - Local dev setup: `python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/pip install --no-deps portunusmcp==0.1.0` — the second install is mandatory and cannot be folded into `pyproject.toml`; see ROADMAP item 0.5. `pip check` exits non-zero in this venv by design; CI must not gate on it.
 - `.venv/bin/pytest` — tests
 - `.venv/bin/ruff check .` — lint
 - `.venv/bin/ruff format --check .` — formatting (fix with `ruff format .`)
 - `.venv/bin/mypy provenance/` — strict type-check
+- `./scripts/gcp_setup.sh` — GCP project, APIs, Firestore, and a live Gemini 3.5 access probe; idempotent. `PROJECT_ID` / `REGION` override the defaults (`provenance-hackathon`, `us-central1`)
+- CI (`.github/workflows/ci.yml`) runs lint, format, type-check, and tests on push/PR — no cloud credentials
+
+Still to come:
+
 - Firestore seed script for the synthetic company (Phase 1, item 4) — idempotent
 - Cloud Run deploy — one command from a clean checkout (Phase 1, item 3)
 - Incident trigger / fault-injection scripts (Phase 3 / Phase 5)
@@ -61,7 +66,7 @@ Nothing is built yet; this section grows as ROADMAP phases land. Planned from da
 
 ## Current phase
 
-**Phase 1 item 0.5 is done (Aug 21); item 1 is next.** No product code exists yet — the repo contains the documentation suite (this file, `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `ROADMAP.md`, `docs/adr/`), the original spec, and a verified `.venv`. The dependency spike settled three things item 1 must honour: our package is **`provenance/`** (a local `services/` would shadow the installed `portunusmcp`), `portunusmcp` installs as a **separate `--no-deps` step** and cannot live in `pyproject.toml`, and CI must not gate on `pip check`. Full findings in the item-0.5 done-note. See `ROADMAP.md` for the full build order; update this section as phases complete, recording what shipped and any deviations, the way each completed item gets a `— **done**:` note in the roadmap.
+**Phase 1 item 1 is in progress (Aug 21): the repo scaffold has landed; the GCP half is pending a run of `scripts/gcp_setup.sh`.** The repo now has `pyproject.toml` (package `provenance/`; runtime deps are `google-adk==2.7.1` + `cryptography` only), ruff / mypy-strict / pytest config, GitHub Actions CI that deliberately does not gate on `pip check`, and `tests/test_portunus_surface.py` guarding the consumed Portunus surface. ADK is a **dependency only** — no agent code, no app: agents arrive in Phase 3, the Cloud Run skeleton in item 3. Alongside it sits the documentation suite (this file, `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `ROADMAP.md`, `docs/adr/`) and the original spec. The item-0.5 constraints all hold in the scaffold: the package is **`provenance/`** (a local `services/` would shadow the installed `portunusmcp`), `portunusmcp` installs as a **separate `--no-deps` step** and must never be added to `pyproject.toml`, and CI does not gate on `pip check`. See `ROADMAP.md` for the full build order; update this section as phases complete, recording what shipped and any deviations, the way each completed item gets a `— **done**:` note in the roadmap.
 
 ---
 
