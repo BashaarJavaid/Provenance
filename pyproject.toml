@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "provenance"
+version = "0.1.0"
+description = "A fleet of agents that detects, diagnoses, fixes, and verifies enterprise incidents, and writes what it confirmed into a governed institutional memory."
+requires-python = "==3.12.*"
+dependencies = [
+    # Pinned to the versions the item-0.5 dependency spike verified against.
+    "google-adk==2.7.1",
+    # Ours, not Portunus's. Portunus pins cryptography==49.0.0; 50.0.0 is verified working (ROADMAP item 0.5).
+    "cryptography>=50.0.0",
+]
+
+# portunusmcp is deliberately NOT listed here. It pins fastapi==0.115.6, which pip
+# silently downgrades out of google-adk's supported range (>=0.133,<1) instead of
+# erroring. It installs as a separate step and `pip check` is expected to fail:
+#     pip install -e ".[dev]" && pip install --no-deps portunusmcp==0.1.0
+# See ROADMAP.md item 0.5 and docs/adr/ADR-004. Do not "fix" this by adding it.
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.14",
+    "mypy>=1.18",
+]
+
+[tool.setuptools.packages.find]
+include = ["provenance*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
