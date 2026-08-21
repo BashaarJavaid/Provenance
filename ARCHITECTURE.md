@@ -364,11 +364,30 @@ A memory system that learns confidently from unreliable verification is worse th
 
 ## 8. Observability and UI
 
-A fleet of agents is invisible. Demo & Production Readiness is 30% of the score, so this is built from Phase 2, not bolted on.
+A fleet of agents is invisible. Demo & Production Readiness is 30% of the score, so this is built from Phase 1, not bolted on.
 
 **One stream:** every component emits OpenTelemetry-compliant spans (trace IDs, reasoning-chain traces) to Cloud Trace/Cloud Logging from day one. The UI, the audit log, and the counterfactual metrics all read that same stream. The trace schema is defined in Phase 1 before any agent is written. ("OpenTelemetry-compliant audit logs" is verbatim in the track brief — a literal requirement match.)
 
-Six UI surfaces:
+### 8.1 The span vocabulary
+
+Four span shapes carry every authority-relevant event, one per decision the architecture makes. Defined in `provenance/telemetry.py` before any agent existed (ROADMAP item 2), so the six surfaces below read one contract rather than whatever each emitter happened to attach.
+
+| Span | Emitted by | Carries |
+|---|---|---|
+| `provenance.authorization.decision` | Agent Gateway (§2.1) | `agent.{id,version,standing}`, `action.{class,target,tier,blast_radius,reversible,evidence_ids}`, the full §4.2 arithmetic as `risk.{base,criticality,blast,irreversibility,score}`, and `decision.{outcome,stage,reason,signature}` |
+| `provenance.belief.commit` | Memory Policy Engine (§2.2) | `belief.{id,version,scope,domain,entity,status,confidence,threshold,supersedes}`, `evidence.{ids,source_classes,novel_count}`, and `decision.{outcome,reason,signature}` |
+| `provenance.verification.outcome` | Verification Agent (§7.2) | `verification.{outcome,predicate_id,model,attempt,belief_written}` plus the action it verified |
+| `provenance.reasoning.chain` | any **[LLM]** component | `agent.{id,version}`, `reasoning.{model,step,hypotheses_considered,selected_hypothesis,input_tokens,output_tokens}`, `recall.belief_ids` |
+
+Three rules make the stream usable as an audit log rather than as debug output:
+
+- **Identifiers, hashes, enums and numbers only — never content.** No payload text, no prompt, no model output, no rationale prose. Evidence appears as IDs and source classes; what an evidence item *said* stays out. This is what item 26's "raw inbound text never appears in the trace" is checked against.
+- **The risk breakdown travels with the decision.** The gateway ledger and the approval card (§8.2, item 31) both render component-by-component arithmetic, and both read this stream — so the components are span attributes, and the emitted score must equal their sum or the emit fails.
+- **Fail-closed (§7.3).** Required fields are typed; an out-of-vocabulary value raises at emit; a span that exits without recording an outcome is marked `ERROR`. An unfinished decision must not read as a clean one. `DENY`, `REJECT` and `REFUTED` set `ERROR`; `INCONCLUSIVE` does not — ambiguity is an honest result, not a failure.
+
+The one deviation from "one stream, both destinations": Cloud **Trace** export is wired; Cloud **Logging** arrives with the first component that logs. On Cloud Run stdout reaches Cloud Logging without any exporter.
+
+### 8.2 Six UI surfaces
 
 - **Live fleet view** — agents, current state, which belief each is reading.
 - **The belief inspector** — a belief object with its evidence, computed confidence and the arithmetic behind it, supersession chain, and decay clock. The money shot.
@@ -411,6 +430,7 @@ Verification criteria per component — these are the source of the `verify:` li
 | Bounded retry | The loop owns the count | Two consecutive `REFUTED` outcomes escalate; no third attempt occurs |
 | Injection arc | The gateway holds when filters leak | End-to-end: the §10-spec payload passes Model Armor and the sanitizer, the dangerous action is proposed, and the gateway holds it at score 11 |
 | Poisoning arc | Arithmetic defense | End-to-end: unverifiable "cleared" claim → confidence unmoved → rejected → three attempts → DEGRADED on the registry panel |
+| Tracing | One stream, defined shapes, no raw content | Assert each shape's span name and exact attribute set against an in-memory exporter; nested shapes share a trace ID; a risk score that doesn't equal its components and an out-of-vocabulary value both raise; no attribute key or value carries payload or model text |
 | Generality | Second domain costs nothing in the control plane | Instrumented line-count report: N lines in one agent file + one registry entry; zero lines in gateway/risk table/Policy Engine/Sweeper/orchestrator |
 
 ## 11. Deployment

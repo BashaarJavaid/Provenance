@@ -30,9 +30,11 @@ if [[ -z "$(gcloud billing projects describe "${PROJECT_ID}" \
   exit 1
 fi
 
-echo "--> enabling APIs (Cloud Run and Cloud Trace land with roadmap items 3 and 2)"
+echo "--> enabling APIs (Cloud Run lands with roadmap item 3)"
+# cloudtrace: the one trace stream (roadmap item 2). Ingestion is free to 2.5M spans/month
+# and nothing here bills while idle, so it costs nothing against the $300 ceiling.
 gcloud services enable aiplatform.googleapis.com firestore.googleapis.com \
-  --project="${PROJECT_ID}"
+  cloudtrace.googleapis.com --project="${PROJECT_ID}"
 
 if gcloud firestore databases describe --database='(default)' \
      --project="${PROJECT_ID}" >/dev/null 2>&1; then

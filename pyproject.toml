@@ -12,6 +12,11 @@ dependencies = [
     "google-adk==2.7.1",
     # Ours, not Portunus's. Portunus pins cryptography==49.0.0; 50.0.0 is verified working (ROADMAP item 0.5).
     "cryptography>=50.0.0",
+    # Cloud Trace export (ROADMAP item 2). opentelemetry-api and -sdk arrive via google-adk
+    # and are deliberately not re-pinned here — ADK caps them at <=1.42.1 and a second pin
+    # would only drift. google-adk[gcp] would also work but pulls four more packages
+    # (logging, monitoring, OTLP-http, resource detector) we don't emit to.
+    "opentelemetry-exporter-gcp-trace>=1.9,<2",
 ]
 
 # portunusmcp is deliberately NOT listed here. It pins fastapi==0.115.6, which pip
