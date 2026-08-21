@@ -104,3 +104,18 @@ def test_the_retail_base_is_internally_consistent() -> None:
         assert order.sku in skus, order.id
     for product in company.PRODUCTS:
         assert product.supplier_id in SUPPLIERS_BY_ID, product.sku
+
+
+def test_the_entity_lookups_resolve_and_raise_on_a_miss() -> None:
+    # §3.1's "target must exist in the entity model", as one call per kind. Item 6's validator
+    # turns the KeyError into UnknownTarget; items 7, 9 and 10 read the tier off the result.
+    assert company.service("inventory-api").tier == "tier2"
+    assert company.supplier("SUP-042").tier == "tier1"
+    with pytest.raises(KeyError):
+        company.service("billing-api")
+    with pytest.raises(KeyError):
+        company.supplier("SUP-999")
+    # Kinds do not bleed: a supplier id is not a service, which is what makes the tool schema's
+    # `target_kind` load-bearing rather than decorative.
+    with pytest.raises(KeyError):
+        company.service("SUP-042")
