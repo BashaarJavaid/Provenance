@@ -44,14 +44,17 @@ else
 fi
 
 # An enabled API is not a servable model: ask each model for one token.
+# Gemini 3.x is served from the `global` endpoint, not a regional one — a regional
+# probe 404s on models that are in fact available. gemini-3.5-pro is not served to
+# this project at all, so the reasoning roles run on 2.5 Pro (ROADMAP item 1).
 TOKEN="$(gcloud auth print-access-token)"
 probe_ok=0
-for model in gemini-3.5-pro gemini-3.5-flash; do
+for model in gemini-2.5-pro gemini-3.5-flash; do
   status="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
     -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" \
     -d '{"contents":[{"role":"user","parts":[{"text":"ping"}]}],
          "generationConfig":{"maxOutputTokens":1}}' \
-    "https://${REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${REGION}/publishers/google/models/${model}:generateContent")"
+    "https://aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/global/publishers/google/models/${model}:generateContent")"
   if [[ "${status}" == "200" ]]; then
     echo "--> ${model}: OK"
   else

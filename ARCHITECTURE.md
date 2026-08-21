@@ -215,18 +215,18 @@ Google's managed inline guardrail: template-configured prompt-injection/jailbrea
 
 Reduces raw inbound data to typed facts; tokenizes PII that survived Model Armor. Runs on a small, isolated open model served via Vertex AI Model Garden — untrusted content never reaches a frontier model raw. Its output is data, never authority: a fact it emits can inform a diagnosis but cannot authorize anything.
 
-### 5.3 Orchestrator **[LLM]** — Gemini 3.5 Pro, ADK Graph Runtime
+### 5.3 Orchestrator **[LLM]** — Gemini 2.5 Pro, ADK Graph Runtime
 
 Classifies the deviation, recalls entity-level *and* class-level beliefs (§6.6), routes to domain agent(s). Wake-on-event against the live trigger stream.
 
-### 5.4 Domain agents **[LLM]** — Gemini 3.5 Pro
+### 5.4 Domain agents **[LLM]** — Gemini 2.5 Pro
 
 - **SRE/Infra Agent** — diagnoses infra anomalies against prior belief; proposes remediation.
 - **Supply-Chain Agent** — diagnoses supplier/inventory disruption against prior belief; proposes mitigation.
 
 Adding a domain must cost one agent file and one registry entry, and zero lines in the gateway, risk table, Policy Engine, Sweeper, or orchestrator — this is instrumented and reported as the generality proof (spec §18; ROADMAP Phase 6).
 
-### 5.5 Remediation Planner **[LLM]** — Gemini 3.5 Pro
+### 5.5 Remediation Planner **[LLM]** — Gemini 2.5 Pro
 
 Converts a diagnosis into exactly one typed Action (§3.1) with declared blast radius, reversibility, evidence references, and a success predicate. Never free-form text. A malformed emission is returned once; a second malformed emission escalates the incident (§7.1).
 
@@ -242,7 +242,7 @@ Identity → RBAC/ABAC → deterministic risk table → sign → approve / hold-
 
 Returns exactly one of `CONFIRMED` / `REFUTED` / `INCONCLUSIVE` against the action's **pre-declared** success predicate (§7.2). High-throughput, lower-stakes — which is why Flash.
 
-### 5.9 Memory Analyst **[LLM]** — Gemini 3.5 Pro
+### 5.9 Memory Analyst **[LLM]** — Gemini 2.5 Pro
 
 Extracts typed evidence, detects semantic conflict with existing belief, proposes class-level generalizations. **Recommends — never commits, never asserts a confidence number.**
 

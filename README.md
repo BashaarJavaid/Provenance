@@ -61,7 +61,7 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
                                     ▼
                        ┌─────────────────────────┐        ┌──────────────────┐
                        │   Orchestrator Agent     │◀──────▶│  Memory Bank     │
-                       │   (Gemini 3.5 Pro, ADK)  │  reads │  (beliefs about  │
+                       │   (Gemini 2.5 Pro, ADK)  │  reads │  (beliefs about  │
                        │   classify → recall →    │ prior  │   this entity +  │
                        │   route                  │ belief │   its class)     │
                        └────────────┬─────────────┘        └──────────────────┘
@@ -74,7 +74,7 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
                                   ▼
                        ┌─────────────────────────┐
                        │   Remediation Planner    │  ← one TYPED action:
-                       │   (Gemini 3.5 Pro)       │    class, target, blast_radius,
+                       │   (Gemini 2.5 Pro)       │    class, target, blast_radius,
                        └────────────┬─────────────┘    reversible, evidence refs
                                     │
                                     │  ← the ONLY path to execution
@@ -103,7 +103,7 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
                               ▼
         ┌─────────────────────────┐        ┌───────────────────────────────┐
         │     Memory Analyst       │───────▶│    Memory Policy Engine        │
-        │  (Gemini 3.5 Pro)        │ RECOM- │    (DETERMINISTIC CODE)        │
+        │  (Gemini 2.5 Pro)        │ RECOM- │    (DETERMINISTIC CODE)        │
         │  extract typed evidence, │ MENDS  │  standing? domain authority?   │
         │  detect conflict with    │        │  evidence NEW? confidence      │
         │  existing belief,        │        │  COMPUTED from evidence ≥      │
@@ -178,7 +178,7 @@ gcloud auth login && gcloud auth application-default login
 
 | Layer | Choice | One-sentence justification |
 |---|---|---|
-| Reasoning | Gemini 3.5 Pro | Orchestration, diagnosis, planning, Memory Analyst |
+| Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst. Gemini 3.5 Pro is not served to this project (verified by probe — see `ROADMAP.md` item 1); the model is a config string per role, not a design assumption |
 | Verification | Gemini 3.5 Flash | High-throughput, lower-stakes three-valued verdicts |
 | Sanitization | Gemma 4 (Vertex AI Model Garden) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
 | Inline guardrails | Model Armor | The managed screening service the track brief names; used honestly as a filter, never as the boundary |

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Decision:** All untrusted external content (supplier alerts, third-party feeds, anything not emitted by our own instrumented systems) passes through Model Armor screening and then a sanitizer running **Gemma 4** (E4B/12B, served via Vertex AI Model Garden) in isolation, which reduces it to typed facts and tokenizes residual PII. Raw untrusted text never appears in a prompt to Gemini 3.5 Pro/Flash. The sanitizer's output is data, never authority.
+**Decision:** All untrusted external content (supplier alerts, third-party feeds, anything not emitted by our own instrumented systems) passes through Model Armor screening and then a sanitizer running **Gemma 4** (E4B/12B, served via Vertex AI Model Garden) in isolation, which reduces it to typed facts and tokenizes residual PII. Raw untrusted text never appears in a prompt to Gemini 2.5 Pro / 3.5 Flash. The sanitizer's output is data, never authority.
 
 **Reasoning, in order of weight:**
 
