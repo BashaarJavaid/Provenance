@@ -57,3 +57,10 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# portunusmcp ships no py.typed marker, so mypy cannot see inside `services.gateway`.
+# provenance/credentials.py is the first module inside the package to import it (item 7).
+# Scoped to that one distribution: everything we write stays under --strict.
+[[tool.mypy.overrides]]
+module = "services.*"
+ignore_missing_imports = true

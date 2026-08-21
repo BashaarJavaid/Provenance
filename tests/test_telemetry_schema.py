@@ -12,18 +12,16 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 
 import pytest
-from opentelemetry import trace
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from conftest import attach_exporter
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
 from provenance import telemetry
 
-_EXPORTER = InMemorySpanExporter()
-_PROVIDER = TracerProvider()
-_PROVIDER.add_span_processor(SimpleSpanProcessor(_EXPORTER))
-trace.set_tracer_provider(_PROVIDER)
+# The provider is global and set once, in conftest.py: two modules emit spans and the second
+# set_tracer_provider() would be ignored.
+_EXPORTER = attach_exporter()
 
 
 @pytest.fixture
@@ -146,6 +144,52 @@ def test_authorization_decision_shape(spans: InMemorySpanExporter) -> None:
     }
     assert span.attributes is not None
     assert span.attributes["provenance.risk.score"] == 2
+
+
+def test_a_denial_before_the_registry_read_still_emits_a_span(spans: InMemorySpanExporter) -> None:
+    """§2.1 stage 6: "every outcome ... including denials" -- even the earliest ones (item 7).
+
+    A proposal rejected at schema validation has no validated action; one rejected because
+    Firestore was unreachable has no standing. Both must still reach the audit stream, so
+    everything but the agent identity off the presented credential is optional. Absent
+    fields are omitted, not emitted empty -- a span carrying `standing: ""` would read as a
+    standing that was read and found blank.
+    """
+    with telemetry.authorization_decision(
+        agent_id="remediation-planner",
+        agent_version="v1",
+    ) as rec:
+        rec.set_outcome(
+            outcome="DENY",
+            stage="registry",
+            reason="REGISTRY_UNAVAILABLE",
+            signature="ecdsa:z",
+        )
+    span = _only(spans)
+    assert span.name == "provenance.authorization.decision"
+    assert _keys(span) == {
+        "provenance.agent.id",
+        "provenance.agent.version",
+        "provenance.decision.outcome",
+        "provenance.decision.stage",
+        "provenance.decision.reason",
+        "provenance.decision.signature",
+    }
+    assert span.status.status_code is StatusCode.ERROR
+
+
+def test_an_out_of_vocabulary_value_still_raises_when_the_field_is_optional() -> None:
+    # Optional means "may be absent", never "may be anything". Widening the shape must not
+    # have widened the vocabulary with it.
+    with (
+        pytest.raises(ValueError, match="provenance.agent.standing"),
+        telemetry.authorization_decision(
+            agent_id="remediation-planner",
+            agent_version="v1",
+            standing="PROBATION",  # type: ignore[arg-type]
+        ),
+    ):
+        pass
 
 
 def test_belief_commit_shape(spans: InMemorySpanExporter) -> None:

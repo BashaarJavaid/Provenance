@@ -148,6 +148,19 @@ def _enum(value: str, allowed: object, attr: str) -> str:
     return value
 
 
+def _opt_enum(value: str | None, allowed: object, attr: str) -> str | None:
+    """`_enum`, but `None` passes through as "not known at this stage" (item 7).
+
+    Only the authorization span needs this. A proposal denied at schema validation has no
+    validated action fields, and one denied because the registry was unreachable has no
+    standing -- but both are outcomes the audit stream must carry (§2.1 stage 6: "every
+    outcome ... including denials"). `_set_attributes` already drops `None`, so the
+    attribute is absent rather than present-and-empty, and an out-of-vocabulary value still
+    raises.
+    """
+    return None if value is None else _enum(value, allowed, attr)
+
+
 @dataclass
 class _Recorder:
     """Base for the per-shape outcome recorders; tracks that an outcome was in fact set."""
@@ -216,27 +229,38 @@ def authorization_decision(
     *,
     agent_id: str,
     agent_version: str,
-    standing: Standing,
-    action_class: str,
-    target: str,
-    target_tier: Tier,
-    blast_radius: BlastRadius,
-    reversible: bool,
-    evidence_ids: Sequence[str],
+    standing: Standing | None = None,
+    action_class: str | None = None,
+    target: str | None = None,
+    target_tier: Tier | None = None,
+    blast_radius: BlastRadius | None = None,
+    reversible: bool | None = None,
+    evidence_ids: Sequence[str] | None = None,
 ) -> Iterator[AuthorizationRecorder]:
-    """The §2.1 action pipeline: one span per proposal, denials included."""
+    """The §2.1 action pipeline: one span per proposal, denials included.
+
+    Everything but the agent's id and version is optional, because §2.1's earliest stages
+    terminate before those facts exist: a proposal rejected at schema validation has no
+    validated action to describe, and one rejected because the registry was unreachable has
+    no standing to report. Requiring them would have meant either a fifth span shape or two
+    denial classes missing from the audit stream, and §2.1 stage 6 admits neither. The id
+    and version stay required — they come off the presented credential, which is on every
+    path. Absent fields are omitted from the span, never emitted empty.
+    """
     with _shape(
         SPAN_AUTHORIZATION_DECISION,
         {
             ATTR_AGENT_ID: agent_id,
             ATTR_AGENT_VERSION: agent_version,
-            ATTR_AGENT_STANDING: _enum(standing, Standing, ATTR_AGENT_STANDING),
+            ATTR_AGENT_STANDING: _opt_enum(standing, Standing, ATTR_AGENT_STANDING),
             ATTR_ACTION_CLASS: action_class,
             ATTR_ACTION_TARGET: target,
-            ATTR_ACTION_TIER: _enum(target_tier, Tier, ATTR_ACTION_TIER),
-            ATTR_ACTION_BLAST_RADIUS: _enum(blast_radius, BlastRadius, ATTR_ACTION_BLAST_RADIUS),
+            ATTR_ACTION_TIER: _opt_enum(target_tier, Tier, ATTR_ACTION_TIER),
+            ATTR_ACTION_BLAST_RADIUS: _opt_enum(
+                blast_radius, BlastRadius, ATTR_ACTION_BLAST_RADIUS
+            ),
             ATTR_ACTION_REVERSIBLE: reversible,
-            ATTR_ACTION_EVIDENCE_IDS: tuple(evidence_ids),
+            ATTR_ACTION_EVIDENCE_IDS: None if evidence_ids is None else tuple(evidence_ids),
         },
         AuthorizationRecorder,
     ) as rec:

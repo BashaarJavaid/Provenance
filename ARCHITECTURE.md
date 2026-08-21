@@ -53,6 +53,16 @@ Every state-mutating proposal passes through these stages in order; the earliest
 6. **Outcome** — `0–3` auto-approve; `4–6` auto-approve with notification; `7+` HOLD for human approval. Every outcome is ECDSA-signed into the audit log, including denials.
 7. **Hold/resume** — a held action parks the incident; the approval card (§8) lands in the store operations manager's queue; the incident resumes on approve/deny via the ADK Task API.
 
+**As built (item 7).** `provenance/gateway.py` is this pipeline and `authorize()` its single entry point; `provenance/risk.py` is §4.2's table and `provenance/credentials.py` stages 1–2's assertion. Five things the implementation settled that the list above left open:
+
+- **The agent signs its own assertion.** "Minted by the registry and verified against the agent's registered `public_key`" only reconciles one way: verifying against the *agent's* public key requires the *agent's* private key, and `scripts/seed_registry.py` prints each private half once and stores it nowhere (ADR-010). So the registry **issues and registers** the keypair — `--rotate` being the one path to a new one — and the agent holds the private half and signs. What the gateway checks is possession of the key matching the record it just read, which is the property that matters.
+- **The registry read physically precedes stage 2**, because the public key stage 2 verifies against is a field on the record stage 3 fetches. The `stage=` recorded on a denial is still §2.1's, so the audit stream reads the way this list does.
+- **Stage 4 is two checks, because RBAC and ABAC are two things.** Tool scope is role-based and is a membership test. The standing rule is attribute-based and is compiled and evaluated by PortunusMCP's `abac` primitives; its condition grammar has no `in` operator, so routing scope through it would mean synthesising an OR-chain to do what `in` does.
+- **A DEGRADED hold is scored anyway.** It terminates at stage 3 by cause — `HOLD, stage="registry", reason="STANDING_DEGRADED"` — but the §4.2 arithmetic rides along, because item 31's approval card renders the component breakdown for everything a human is asked to approve, and "held despite scoring 2" is the sentence item 28's beat needs. A `SUSPENDED` denial carries no score: a denial owes the human no arithmetic.
+- **The credential lifetime is 300 seconds** (`credentials.CREDENTIAL_TTL_SECONDS`), a number no document previously carried — the same gap §3.4's rolling window had before item 5.
+
+The gateway returns its own frozen `Decision` (outcome, stage, reason, subject, score, signature), not PortunusMCP's `decision.Decision`: that vocabulary is allow / deny / challenge / human_approval_required, which cannot express §4.2's APPROVE vs APPROVE_NOTIFY split and carries one value this system has no concept of. Reasoning in `docs/adr/ADR-012`.
+
 ### 2.2 The memory write pipeline (Memory Policy Engine)
 
 The mirror. Every proposed belief commit passes through:
@@ -184,6 +194,10 @@ Worked examples, so demo outcomes are principled rather than convenient:
 | `DISABLE_COMPLIANCE_CHECKS(SUP-042)` | 4 | +2 | +2 | +3 | **11** | human approval required |
 
 Disabling a compliance control scores high because it mutates a safety control, on a tier-1 target, org-wide, and the transactions that occur while it is off cannot be un-occurred. Rollback scores low because it is a reversible, single-service change to a known-good prior state.
+
+**As built (item 7).** `provenance/risk.py`. The three point tables above are enumerated in full by this section; `base[action_class]` was not, and now has one address: `risk.BASE` — `ROLLBACK_CONFIG` 1, `DISABLE_COMPLIANCE_CHECKS` 4, the two values the worked examples fix by arithmetic. It lives here rather than on `tools.Tool` so a change to the table is a change to one file (ADR-011). A test asserts `set(risk.BASE)` equals the set of `tools.TOOLS` action classes, so a third tool cannot ship without a base score and fail at authorization time instead of at build time.
+
+`score()` takes a validated `Action` and nothing else — no confidence, no model output, no free parameter — which is §4.1's rule made structural rather than documentary. `band()` returns `APPROVE`, `APPROVE_NOTIFY` or `HOLD` and **never `DENY`**: every denial in the system comes from *who is asking* (identity, registry standing, tool scope), and the score's worst possible answer is "a human decides". `tests/test_risk.py` sweeps all 2 × 3 × 3 × 2 = 36 combinations — §10's Risk-table row — because a lookup with a hole is a crash at authorization time, not a wrong number.
 
 ### 4.3 Confidence — computed, not asserted
 
@@ -404,6 +418,8 @@ Three rules make the stream usable as an audit log rather than as debug output:
 - **The risk breakdown travels with the decision.** The gateway ledger and the approval card (§8.2, item 31) both render component-by-component arithmetic, and both read this stream — so the components are span attributes, and the emitted score must equal their sum or the emit fails.
 - **Fail-closed (§7.3).** Required fields are typed; an out-of-vocabulary value raises at emit; a span that exits without recording an outcome is marked `ERROR`. An unfinished decision must not read as a clean one. `DENY`, `REJECT` and `REFUTED` set `ERROR`; `INCONCLUSIVE` does not — ambiguity is an honest result, not a failure.
 
+**Amended in item 7 — the authorization span's fields are optional below `agent.{id,version}`.** §2.1's earliest stages terminate before the facts the shape originally required exist: a proposal rejected at schema validation has no validated action to describe, and one rejected because Firestore was unreachable has no standing to report. Requiring them would have forced either a fifth span shape or two whole denial classes missing from the audit stream, and §2.1 stage 6 — "every outcome is ECDSA-signed into the audit log, including denials" — admits neither. So `standing` and the six `action.*` attributes may be absent; `agent.id` and `agent.version` stay required, because they come off the presented credential, which is on every path. **Absent means omitted, never emitted empty** — a span carrying `standing: ""` would read as a standing that was read and found blank. Optional widened what may be *missing*, not what may be *present*: an out-of-vocabulary value still raises. Four shapes, no new attribute key.
+
 The one deviation from "one stream, both destinations": Cloud **Trace** export is wired; Cloud **Logging** arrives with the first component that logs. On Cloud Run stdout reaches Cloud Logging without any exporter.
 
 ### 8.2 Six UI surfaces
@@ -451,6 +467,7 @@ Verification criteria per component — these are the source of the `verify:` li
 | Component | Core guarantee | Verify by |
 |---|---|---|
 | Gateway | No second path to execution; registry read at request time | Test that flips an agent's standing to DEGRADED mid-run and asserts the *next* proposal is held regardless of risk score; test that a low-risk action from a SUSPENDED agent is denied |
+| Agent identity | Possession of the registered key, and only while unexpired | A credential signed by another agent's key is denied; one minted for a superseded `agent_version` is denied; one presented at its own `expires_at` is denied; an action attributed to an agent other than the credential's holder is denied |
 | Risk table | Pure function of typed action | Table-driven tests over every `action_class` × tier × blast × reversibility combination; assert the two worked examples score 2 and 11 exactly |
 | Schema validation | Hallucinated actions die before the gateway; the tool registry, not the Planner, is authoritative | Test a fabricated `action_class`, a nonexistent target, and free-form text: all rejected pre-gateway; a target of the wrong kind for the tool is rejected; a Planner declaring `DISABLE_COMPLIANCE_CHECKS` reversible or understating a tier fails validation; second malformed emission escalates at `MALFORMED_RETRY_BUDGET` |
 | Confidence formula | Computed, never asserted; assertion-proof | Property tests: `unverified_external_claim`-only evidence yields conf 0.00; same source class restated N times yields the same conf as once; age decay is monotonic |

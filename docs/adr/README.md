@@ -13,3 +13,4 @@ One file per consequential architecture decision. Load the specific ADR relevant
 - [`ADR-009-synthetic-company-collections.md`](./ADR-009-synthetic-company-collections.md) — Typed Firestore collections for the synthetic company; the fault switch is data, not deploy config
 - [`ADR-010-agent-registry-record.md`](./ADR-010-agent-registry-record.md) — The agent registry record: flat `agents/{id}`, stored standing authoritative, the rolling window given a number
 - [`ADR-011-tool-registry-and-action-validation.md`](./ADR-011-tool-registry-and-action-validation.md) — The tool registry as a constant (not Firestore), the Action's eight fields and no `params`, validation that raises
+- [`ADR-012-the-gateway.md`](./ADR-012-the-gateway.md) — The gateway: the agent signs its own credential, RBAC and ABAC split, a `Decision` of our own, and an ephemeral signing key
