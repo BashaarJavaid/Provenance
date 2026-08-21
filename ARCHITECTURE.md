@@ -87,6 +87,22 @@ Action {
 
 `reversible` and `blast_radius` are declared by the Planner and **validated against the tool schema** — the tool registry knows that `DISABLE_COMPLIANCE_CHECKS` is irreversible and org-wide, so a Planner claiming otherwise fails validation. Not vibes.
 
+The tool registry is `provenance/tools.py`: an in-code frozen constant, not a Firestore
+collection. A `Tool` carries four fields — `action_class`, `target_kind` (`service` |
+`supplier`, which selects the entity collection the target must be found in), and the
+authoritative `reversible` and `blast_radius`. It deliberately does not carry
+`base[action_class]`; every risk component lives together in §4.2's table. Standing is read at
+request time because it changes mid-run (§1.1 property 4); a tool's reversibility does not
+change at all, which is why this registry is a constant and the agent registry is not.
+
+`provenance/action.py` holds the Action itself and `validate()`, which turns an untrusted
+proposal into a typed Action or raises. **There is deliberately no `params` field.** §4.2 writes
+the worked example as `ROLLBACK_CONFIG(inventory-api, v42→v41)`, but the versions are not the
+Planner's to choose: the executor reads `known_good_version` off the service in the entity
+model. An open parameters field would be a typed channel an LLM could put anything through, on
+the one object the whole determinism boundary is a pure function of. Schema reasoning in
+[`docs/adr/ADR-011`](./docs/adr/ADR-011-tool-registry-and-action-validation.md).
+
 ### 3.2 The Belief object
 
 ```
@@ -337,6 +353,7 @@ The judging criteria ask directly: how does the system recover if a worker agent
 ### 7.1 Hallucinated actions and looping agents
 
 - **A hallucinated action dies at schema validation, before the gateway ever sees it.** A fabricated tool, a nonexistent target, or free-form text is rejected mechanically and returned to the Planner exactly once; a second malformed emission escalates the incident to a human.
+  *"Before the gateway" and §2.1's "stage 1" describe one design.* Validation is `provenance/action.py`, a standalone pure function run first, and a rejection there reaches none of the stages that follow — no identity check, no registry read, no ABAC, no risk score. The retry budget is `action.MALFORMED_RETRY_BUDGET` (1); the control loop keeps the count, not the Planner.
 - **Loops are bounded by construction.** Every incident carries a retry budget: one bounded re-plan after a `REFUTED` verification, then mandatory escalation. No agent owns its own iteration count — the control loop does, in code.
 - **A plausible-but-wrong action is caught downstream.** If a hallucinated diagnosis produces an action that validates, it still faces the risk table on objective properties and verification against its pre-declared success predicate. A wrong action that executes gets `REFUTED`, and the refutation becomes a learned negative belief — the failure teaches the fleet instead of just costing it.
 
@@ -435,7 +452,7 @@ Verification criteria per component — these are the source of the `verify:` li
 |---|---|---|
 | Gateway | No second path to execution; registry read at request time | Test that flips an agent's standing to DEGRADED mid-run and asserts the *next* proposal is held regardless of risk score; test that a low-risk action from a SUSPENDED agent is denied |
 | Risk table | Pure function of typed action | Table-driven tests over every `action_class` × tier × blast × reversibility combination; assert the two worked examples score 2 and 11 exactly |
-| Schema validation | Hallucinated actions die before the gateway | Test a fabricated `action_class`, a nonexistent target, and free-form text: all rejected pre-gateway; second malformed emission escalates |
+| Schema validation | Hallucinated actions die before the gateway; the tool registry, not the Planner, is authoritative | Test a fabricated `action_class`, a nonexistent target, and free-form text: all rejected pre-gateway; a target of the wrong kind for the tool is rejected; a Planner declaring `DISABLE_COMPLIANCE_CHECKS` reversible or understating a tier fails validation; second malformed emission escalates at `MALFORMED_RETRY_BUDGET` |
 | Confidence formula | Computed, never asserted; assertion-proof | Property tests: `unverified_external_claim`-only evidence yields conf 0.00; same source class restated N times yields the same conf as once; age decay is monotonic |
 | Novelty check | Mechanical | Duplicate `(source_id, observed_at)` pair is not new; same source at a new timestamp is |
 | Conflict rule | One sensor cannot set and clear its own alarm | Status-flip attempt with only same-source-class evidence is rejected even above the 0.70 threshold; with a different class it commits |

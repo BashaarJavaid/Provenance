@@ -43,6 +43,7 @@ from opentelemetry.trace import Span, Status, StatusCode
 
 Tier = Literal["tier1", "tier2", "tier3"]
 BlastRadius = Literal["single-service", "multi-service", "org-wide"]
+TargetKind = Literal["service", "supplier"]
 Standing = Literal["GOOD", "DEGRADED", "SUSPENDED"]
 AuthOutcome = Literal["APPROVE", "APPROVE_NOTIFY", "HOLD", "DENY"]
 AuthStage = Literal["schema", "identity", "registry", "abac", "risk"]

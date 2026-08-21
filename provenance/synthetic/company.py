@@ -343,3 +343,23 @@ ORDERS: tuple[Order, ...] = (
         fulfillment="picking",
     ),
 )
+
+# --- entity lookup ----------------------------------------------------------------------
+#
+# §3.1's "target must exist in the entity model" needs one call per entity kind. ADR-009 kept
+# the collections typed precisely so the caller always knows which kind it holds, and item 6's
+# tool schema names that kind (`tools.Tool.target_kind`), so a polymorphic lookup would have
+# nothing to resolve. Both raise `KeyError`; nothing here returns an optional.
+
+_SERVICES_BY_ID = {service.id: service for service in SERVICES}
+_SUPPLIERS_BY_ID = {supplier.id: supplier for supplier in SUPPLIERS}
+
+
+def service(service_id: str) -> Service:
+    """The service with this id. Raises `KeyError` if the entity model has no such service."""
+    return _SERVICES_BY_ID[service_id]
+
+
+def supplier(supplier_id: str) -> Supplier:
+    """The supplier with this id. Raises `KeyError` if the entity model has no such supplier."""
+    return _SUPPLIERS_BY_ID[supplier_id]
