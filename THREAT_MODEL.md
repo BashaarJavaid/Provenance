@@ -1,0 +1,45 @@
+# Threat Model
+
+What Provenance protects against, what it explicitly does not, and the assumptions the whole model depends on. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for how each protection is implemented, and [`docs/adr/`](./docs/adr/) for why certain alternative approaches weren't used.
+
+---
+
+An explicit scope boundary is worth more to a technical reviewer than an implied claim of total coverage.
+
+**The rule for this table: a row may only become more optimistic when the ROADMAP item that earns it is actually built and its `verify:` check passes.** Claims outrunning implementation is the exact failure this document exists to prevent. Until Phase 1 ships, every "Yes" below describes the *design*, not running code — each row names the ROADMAP item that turns it into a tested claim.
+
+| Threat | Protected? | Notes |
+|---|---|---|
+| Prompt injection embedded in inbound data | **Yes — but not where you'd like the boundary to be** (items 25–27) | Model Armor screens (injection/jailbreak + SDP) and the Gemma sanitizer reduces input to typed facts — both are **filters that leak by design**; any architecture whose safety depends on a classifier recognizing adversarial text is one clever phrasing away from failure. The boundary is the gateway: it never reads the payload, cannot be persuaded, and scores the *typed action* on properties the action objectively has. The demo shows both outer layers leaking and the gateway holding at score 11 |
+| Memory poisoning — a false belief asserted without verifiable evidence | **Yes (arithmetic)** (items 13–14) | `unverified_external_claim` evidence carries base weight **0.00**, so a bare assertion moves computed confidence by exactly nothing; a status flip additionally requires evidence of a `source_class` different from the one that established the current status. The defense is arithmetic, not a model's opinion about whether something smells adversarial |
+| Confidence inflation by repetition | **Yes** (item 13) | Noisy-OR combines only *distinct source classes*, so restating the same observation five times scores the same as stating it once |
+| Repeated poisoning attempts by a compromised agent | **Yes** (item 28) | Three rejected memory writes lacking verifiable evidence inside the rolling window → standing drops to `DEGRADED`: every subsequent proposal requires human approval regardless of risk score, and memory writes are rejected outright. Restoration requires explicit human reinstatement — the system never quietly forgives |
+| Hallucinated action (fabricated tool, nonexistent target, free-form text) | **Yes** (item 6) | Dies at schema validation before the gateway ever sees it; returned to the Planner exactly once, and a second malformed emission escalates the incident to a human |
+| Plausible-but-wrong action that validates | **Yes (downstream)** (items 7, 19) | It still faces the risk table on objective properties and verification against its pre-declared success predicate; a wrong action that executes gets `REFUTED` and becomes a learned negative belief |
+| Looping / runaway agent | **Yes (by construction)** (item 20) | Every incident carries a retry budget owned by the control loop in code — one bounded re-plan after `REFUTED`, then mandatory escalation. No agent owns its own iteration count |
+| An agent talking its way past authorization (stated urgency, persuasive framing) | **Yes** (items 7–8) | The gateway's inputs are typed action fields, cryptographic identity, registry state, and table lookups. The proposal's prose is not an input. `ARCHITECTURE.md` §4.4 lists what each decision is *forbidden* to consume |
+| False institutional truth from unreliable verification | **Yes (by refusal)** (item 19) | Three-valued verification: `INCONCLUSIVE` writes **nothing** — no belief, no partial credit. Memory learns only from outcomes that could actually be confirmed |
+| Stale beliefs silently treated as current | **Yes** (item 29) | Every belief carries a decay schedule; the Staleness Sweeper re-verifies or downgrades to `UNKNOWN(reason=stale)` on expiry — excluded from recall and confidence computation, never deleted |
+| Acting on a belief later proven wrong | **Yes (detective)** (item 15) | Retraction is a first-class transition that flags every action previously authorized on the retracted belief in the audit log for review. Detective, not preventive — the actions already happened |
+| Retrieval index leaking retracted/stale beliefs into reasoning | **Yes** (item 16) | The embedding index nominates belief IDs only; the store resolves each to its current version and drops `RETRACTED` / `UNKNOWN(stale)` before anything reaches the Orchestrator |
+| PII leakage into institutional memory | **Yes** (items 25–26) | Model Armor's Sensitive Data Protection screens 150+ infoTypes at ingest; the sanitizer tokenizes what remains; beliefs reference entity IDs, never raw personal data |
+| Class-belief generalization authorizing anything | **Yes (capped)** (item 23) | Class beliefs are hard-capped `ADVISORY ONLY`: confidence ≤ 0.75 and below the weakest constituent, may reorder hypothesis priority, may never authorize an action or evidence an entity-belief commit. A wrong class belief costs investigation order, never authorization |
+| Model Armor / sanitizer bypass by a crafted payload | **Partial (by design)** | Expected and designed for — the demo payload itself clears Model Armor's threshold. Screening is defense in depth, never load-bearing; the row above ("prompt injection") describes where the real boundary is |
+| Class beliefs derived from thin data (n=3) being simply wrong | **Partial (disclosed)** | Statistically thin generalization is bounded by the advisory cap, not prevented. A production version needs a real minimum-support policy (see ROADMAP, "Beyond the hackathon") |
+| Verification failing the way production fails | **No (disclosed)** | Verification runs against a synthetic system whose state we control, so it cannot fail with production's ambiguity. The `REFUTED`/`INCONCLUSIVE` paths are implemented and exercised via fault injection (items 19–20), and the limitation is stated plainly in the submission |
+| Compromised gateway / Memory Policy Engine host | **No** | If the process that *is* the determinism boundary is compromised, the attacker holds the signing keys and the authority. This is a GCP deployment/IAM hardening problem, not something the application layer can defend against |
+| Insider human approver making a bad approve/deny call | **No** | The approval card makes the decision informed and the signed ledger makes it attributable and tamper-evident after the fact, but a legitimate approver approving a bad action is out of scope — that requires a multi-approver workflow (see ROADMAP, "Beyond the hackathon") |
+| Colluding majority of evidence sources | **No** | Confidence assumes distinct source classes are independent. If the system observations, audits, and contractual records feeding a belief are all controlled by one adversary, the arithmetic is satisfied and the belief commits. Source-class independence is an assumption (below), not an enforced property |
+
+**Assumptions** — every threat model implicitly relies on some things being true; stating them explicitly is what separates a scoped security document from an implied claim of total coverage:
+
+- **The gateway is architecturally the only path to execution.** Load-bearing property 1 (`ARCHITECTURE.md` §1.1). Every protection above assumes no second path exists; CI and review must treat any bypass — including "temporary" test hooks — as a security regression, not a convenience.
+- **The registry, gateway, and Memory Policy Engine run on uncompromised infrastructure** (Cloud Run services under project IAM). A compromised deterministic layer invalidates everything — see the "No" rows.
+- **Distinct evidence source classes are independent.** The noisy-OR computation combines them as independent corroboration; a colluding majority defeats it (see the last "No" row).
+- **The typed-action schema honestly describes the tools.** The tool registry, not the Planner, is authoritative for reversibility and blast radius; if the registry mislabels an irreversible tool as reversible, the risk table scores it wrong. Registry entries are hand-authored and reviewed.
+- **The synthetic company is internally consistent and we control its state.** Verification predicates are meaningful against it; this is also the source of the disclosed verification-realism limitation.
+- **The human approver is present and acting in good faith.** Held actions park indefinitely rather than auto-approving on timeout (fail closed), but the model does not defend against a malicious approver.
+- **Google's managed services (Model Armor, Vertex AI, Firestore) behave as documented.** Their verdicts are logged and treated as filters/data stores, never as the boundary, which bounds the damage of a misbehaving service.
+- **PortunusMCP's identity, RBAC/ABAC, and signing primitives are correct.** It is consumed as a library the way one trusts an auth framework; its own threat model lives in its own repo.
+
+---
