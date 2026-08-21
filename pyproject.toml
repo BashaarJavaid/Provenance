@@ -17,6 +17,10 @@ dependencies = [
     # would only drift. google-adk[gcp] would also work but pulls four more packages
     # (logging, monitoring, OTLP-http, resource detector) we don't emit to.
     "opentelemetry-exporter-gcp-trace>=1.9,<2",
+    # The Cloud Run service (ROADMAP item 3). Both already arrive via google-adk; declared
+    # here because we import them, with ADK's own ranges so the two can never conflict.
+    "fastapi>=0.133,<1",
+    "uvicorn>=0.34,<1",
 ]
 
 # portunusmcp is deliberately NOT listed here. It pins fastapi==0.115.6, which pip
@@ -34,6 +38,10 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["provenance*"]
+
+# The UI shell is a data file, not a module; without this the wheel drops it.
+[tool.setuptools.package-data]
+provenance = ["web/*.html"]
 
 [tool.ruff]
 line-length = 100

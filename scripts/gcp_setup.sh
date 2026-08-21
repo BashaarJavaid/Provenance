@@ -30,11 +30,23 @@ if [[ -z "$(gcloud billing projects describe "${PROJECT_ID}" \
   exit 1
 fi
 
-echo "--> enabling APIs (Cloud Run lands with roadmap item 3)"
+echo "--> enabling APIs"
 # cloudtrace: the one trace stream (roadmap item 2). Ingestion is free to 2.5M spans/month
 # and nothing here bills while idle, so it costs nothing against the $300 ceiling.
+# run/cloudbuild/artifactregistry: what `./scripts/deploy.sh` needs (roadmap item 3).
+# Cloud Run at min-instances=0 bills nothing idle; Cloud Build minutes are free-tier here.
 gcloud services enable aiplatform.googleapis.com firestore.googleapis.com \
-  cloudtrace.googleapis.com --project="${PROJECT_ID}"
+  cloudtrace.googleapis.com run.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com --project="${PROJECT_ID}"
+
+# `gcloud run deploy --source` builds as the Compute Engine default service account, which
+# on a project created after mid-2024 has no build permissions and fails after the source
+# upload with an opaque PERMISSION_DENIED. add-iam-policy-binding is a no-op if already set.
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+echo "--> granting the Cloud Build role to ${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role='roles/cloudbuild.builds.builder' --condition=None --quiet >/dev/null
 
 if gcloud firestore databases describe --database='(default)' \
      --project="${PROJECT_ID}" >/dev/null 2>&1; then
