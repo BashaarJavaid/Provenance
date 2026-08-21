@@ -410,6 +410,21 @@ Layered on top, hand-authored for coherence:
 
 Recurrence matters: institutional memory only reads as real when the same entities recur. A small, coherent, recurring cast proves everything.
 
+**As built (ROADMAP item 4).** The cast is a typed fixture in `provenance/synthetic/company.py`, written to Firestore by `scripts/seed_firestore.py`. Cymbal Home & Garden, after the `google/adk-samples` sample it derives from:
+
+| Entity | Tier | Role |
+|---|---|---|
+| `inventory-api` | tier2 | The SRE arc. v42 deployed over a known-good v41 — the gap incidents #1 and #2 need |
+| `pricing-api` | tier2 | Incident #3. No config history and no beliefs, so the class belief carries the diagnosis alone |
+| `checkout-api` | tier2 | Never appears in an incident; enlarges the tier-2 population the class belief generalizes over |
+| `SUP-042` "Verdant Supply Co." | tier1 | Supplier X — the injection and poisoning target |
+| `SUP-017`, `SUP-093` | tier2 | The rest of the supply base |
+| Dana Ruiz | — | Store Operations Manager; owns the item-30 approval queue |
+
+Collections are typed rather than one polymorphic `entities` collection, config history is a `services/{id}/config_versions/{version}` subcollection, and the fault switch is a `fault_injection/{target_id}` document read at request time rather than deploy config — all three recorded in [`docs/adr/ADR-009`](./docs/adr/ADR-009-synthetic-company-collections.md).
+
+Two values here are load-bearing elsewhere and are asserted by `tests/test_synthetic_company.py`: `inventory-api` is **tier2** and `SUP-042` is **tier1**, which is what makes §4.2's worked examples score 2 and 11. And **no entity document carries a status** — `SUP-042` becomes AT_RISK through the belief store in item 17, with evidence and a computed confidence behind it, or not at all. A seed script asserting it would be a belief with no provenance, in a place recall never looks.
+
 ## 10. Testing strategy
 
 Verification criteria per component — these are the source of the `verify:` lines in [`ROADMAP.md`](./ROADMAP.md). Each core guarantee gets a test that tries to break it, not just one that confirms the happy path.
