@@ -208,6 +208,13 @@ def _seed_state(
         "target_description": service.description,
         "current_config_version": service.current_config_version or "unknown",
         "known_good_version": service.known_good_version or "unknown",
+        # Item 11.5. What healthy looks like, from the frozen fixture and never from the
+        # trigger: `executor.execute()` writes this exact value back on a successful rollback,
+        # so a Planner told the *spiked* rate would declare a threshold no success can satisfy.
+        # Both units because the defect was a units collision -- the model translated 0.01 into
+        # "less than 1%" and could not see it had landed on the baseline.
+        "nominal_error_rate": service.error_rate,
+        "nominal_error_rate_pct": f"{service.error_rate * 100:g}",
         "known_action_classes": ", ".join(tool.action_class for tool in tools.TOOLS),
         "planner_identity": f"{PLANNER_ID}@{planner_version}",
         "recall_summary": "none" if not recalled else ", ".join(recalled),
