@@ -36,8 +36,9 @@ Fail-closed (§7.3), following `registry.py` exactly: no function returns `Belie
 None`. A missing belief, an unreachable database and a losing concurrent write all raise —
 a `None` someone forgets to branch on is how an unwritten belief becomes a written one.
 
-Schema reasoning in `docs/adr/ADR-016`. Item 13 adds the novelty check over the evidence
-this module stores; item 14 the §6.3 conflict rule; item 15 `RETRACT`; item 16 recall.
+Schema reasoning in `docs/adr/ADR-016`, and `docs/adr/ADR-017` for the novelty check item 13
+added over the evidence this module stores (`evidence_id`, `read_evidence`, `novel`). Item 14
+adds the §6.3 conflict rule; item 15 `RETRACT`; item 16 recall.
 """
 
 from __future__ import annotations
@@ -131,6 +132,29 @@ def payload_hash(payload: object) -> str:
     return hashlib.sha256(repr(payload).encode()).hexdigest()
 
 
+def evidence_id(source_id: str, observed_at: str) -> str:
+    """§2.2's pair, as the id that names it — content-addressed, not assigned.
+
+    `append()` writes evidence `create()`-if-absent, so an id that does not determine its own
+    contents lets the second write of a colliding id be discarded in silence, leaving a
+    stored document that disagrees with the pair it claims. Deriving the id from the pair
+    makes that unrepresentable: the same observation is the same document, always.
+    """
+    return f"ev-{hashlib.sha256(f'{source_id}|{observed_at}'.encode()).hexdigest()[:16]}"
+
+
+def novel(proposed: Sequence[Evidence], known: Sequence[Evidence]) -> tuple[Evidence, ...]:
+    """§2.2 stage 3, mechanically: new iff `(source_id, observed_at)` is not already there.
+
+    Pairs, not ids. The id is derived from the pair by `evidence_id()` and would compare the
+    same, but a caller that assigns its own — the tests and `verify_belief_store.py` both do
+    — must not be able to slip a duplicate past the check by naming it something new. No
+    model judgment is involved anywhere in this function, which is the entire point of it.
+    """
+    seen = {(item.source_id, item.observed_at) for item in known}
+    return tuple(item for item in proposed if (item.source_id, item.observed_at) not in seen)
+
+
 # --- Firestore ------------------------------------------------------------------------------
 
 _client: firestore.AsyncClient | None = None
@@ -154,6 +178,10 @@ def _root(belief_id: str, client: Any | None) -> Any:
 
 def _version_doc(belief_id: str, version: int, client: Any | None) -> Any:
     return _db(client).collection(f"{COLLECTION}/{belief_id}/versions").document(str(version))
+
+
+def _evidence_doc(item_id: str, client: Any | None) -> Any:
+    return _db(client).collection(EVIDENCE_COLLECTION).document(item_id)
 
 
 def to_document(version: BeliefVersion) -> dict[str, Any]:
@@ -228,6 +256,43 @@ async def history(belief_id: str, *, client: Any | None = None) -> tuple[BeliefV
 async def current(belief_id: str, *, client: Any | None = None) -> BeliefVersion:
     """The version in force: the newest one that exists. Raises if the belief does not."""
     return (await history(belief_id, client=client))[-1]
+
+
+async def read_evidence(ids: Sequence[str], *, client: Any | None = None) -> tuple[Evidence, ...]:
+    """Resolve cited ids to the §3.3 objects they name, in the order they were cited.
+
+    A version citing an id no document answers is a belief resting on provenance the store
+    cannot produce, so this raises `BeliefNotFound` rather than returning a shorter tuple.
+    Silently dropping it would let §2.2's novelty check compare against a history with holes
+    in it and call a duplicate new (§7.3).
+    """
+    items = []
+    for item_id in ids:
+        snapshot = await _get(_evidence_doc(item_id, client))
+        if not snapshot.exists:
+            raise BeliefNotFound(f"{EVIDENCE_COLLECTION}/{item_id} is cited but not stored")
+        items.append(evidence_from_document(item_id, snapshot.to_dict()))
+    return tuple(items)
+
+
+def evidence_from_document(item_id: str, data: dict[str, Any] | None) -> Evidence:
+    """Parse one stored evidence item. Raises rather than defaulting, as `from_document` does."""
+    if data is None:
+        raise BeliefStoreError(f"{EVIDENCE_COLLECTION}/{item_id}: document is empty")
+    try:
+        return Evidence(
+            id=data["id"],
+            source_id=data["source_id"],
+            source_class=data["source_class"],
+            observed_at=data["observed_at"],
+            ingested_at=data["ingested_at"],
+            payload_hash=data["payload_hash"],
+            verifiable_by=data["verifiable_by"],
+        )
+    except (KeyError, TypeError) as exc:
+        raise BeliefStoreError(
+            f"{EVIDENCE_COLLECTION}/{item_id}: malformed evidence ({exc})"
+        ) from exc
 
 
 async def append(

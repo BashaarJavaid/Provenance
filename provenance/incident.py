@@ -444,13 +444,20 @@ async def _commit_belief(
     `source_id` names the read the executor actually performed, not the model that agreed
     with it, and `verifiable_by` names how a third party would redo it. That is the whole
     difference between evidence and testimony (§3.3).
+
+    The id is `beliefs.evidence_id()` over the `(source_id, observed_at)` pair, not — as it
+    was until item 13 — the success predicate's hash. Two incidents whose Planner happened to
+    write the same predicate sentence share that hash while observing at different times, and
+    `beliefs.append()` is create-if-absent, so the second write was discarded and the stored
+    document kept the first run's timestamp. §2.2's novelty check reads those documents.
     """
     assert scratch.validated is not None and scratch.post_state is not None
     validated = scratch.validated
     observed_at = now.astimezone(UTC).strftime(beliefs.TIMESTAMP)
+    source_id = f"firestore:{executor.SERVICES}/{validated.target}"
     evidence = beliefs.Evidence(
-        id=f"ev-{action.predicate_id(validated)}",
-        source_id=f"firestore:{executor.SERVICES}/{validated.target}",
+        id=beliefs.evidence_id(source_id, observed_at),
+        source_id=source_id,
         source_class="verified_system_observation",
         observed_at=observed_at,
         ingested_at=observed_at,

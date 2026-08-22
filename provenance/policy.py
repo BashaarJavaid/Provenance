@@ -6,15 +6,16 @@ from a published formula, compares it to a threshold, signs, and writes — or r
 
 Item 10 shipped this as a stub that could commit exactly one version and refused a second.
 Item 12 gave it the versioned store (`beliefs.py`), so a re-affirmation now commits a real
-superseding version and `SUPERSESSION_UNSUPPORTED` is gone rather than merely unused. What
+superseding version and `SUPERSESSION_UNSUPPORTED` is gone rather than merely unused. Item 13
+wired stage 3 and widened stage 4 to the accumulated evidence set (`docs/adr/ADR-017`). What
 runs today:
 
 | §2.2 stage | Here |
 |---|---|
 | 1. typed-evidence validation | `beliefs.Evidence` is §3.3's seven fields, constructed by code |
 | 2. registry read, request-time | `registry.get_agent()`, standing GOOD **and** domain held |
-| 3. novelty check | **absent** — item 13 owns it |
-| 4. computed confidence | `confidence()`, §4.3's noisy-OR (item 13 owns the full version) |
+| 3. novelty check | `beliefs.novel()` over `(source_id, observed_at)`; nothing new is a REJECT |
+| 4. computed confidence | `confidence()`, §4.3's noisy-OR over the **accumulated** evidence |
 | 5. threshold + conflict rule | threshold for every version; §6.3's flip rule is item 14's |
 | 6. outcome | COMMIT or REJECT, signed, one `belief.commit` span |
 
@@ -24,6 +25,14 @@ different-source-class rule, and neither exists until item 14. Letting a flip th
 the one thing §6.3 exists to prevent — so a proposal whose status differs from the current
 version is answered `REJECT("FLIP_UNSUPPORTED")`. Same status, new evidence, is a
 re-affirmation: v2 supersedes v1, and v1 is left exactly as it was committed.
+
+**A version rests on everything it has ever rested on.** §3.2 renders belief #42 citing
+`ev-[118,140,141]` where its predecessor #17 cited `ev-[118]`, so a superseding version
+carries its predecessor's evidence forward and the confidence recomputes over the union.
+Without that, §6.3's legitimate-update case cannot reach the 0.70 door item 14 needs: an
+Aug-1 `contractual_record` plus an Aug-15 `third_party_audit` is 0.71 accumulated and 0.55
+if only the new item counts. Novelty is what keeps the set honest — it can only ever grow by
+observations nobody has made before.
 
 Also still absent by design: the standing-counter write §2.2 stage 6 names (item 14), and
 `RETRACT` (§6.4, item 15).
@@ -62,8 +71,9 @@ BASE_WEIGHT: dict[SourceClass, float] = {
     "unverified_external_claim": 0.00,
 }
 
-# §6.5's decay clock, as one number. Item 13 makes it per-domain ("half_life_domain"); with
-# one domain writing beliefs there is nothing yet to vary it by.
+# §6.5's decay clock, as one number, and published in §4.3 beside the weights it multiplies.
+# §4.3 writes it "half_life_domain"; item 21 is what makes it per-domain, because that is when
+# a second domain first writes beliefs. A dict keyed by one key varies by nothing.
 HALF_LIFE_DAYS = 30.0
 
 # §6.5's two expiry behaviours. The Sweeper (Phase 9) is what consumes this; item 12 writes
@@ -82,6 +92,7 @@ CommitReason = Literal[
     "STANDING_NOT_GOOD",
     "DOMAIN_NOT_HELD",
     "REGISTRY_UNAVAILABLE",
+    "NO_NEW_EVIDENCE",
     "FLIP_UNSUPPORTED",
     "VERSION_CONFLICT",
     "STORE_UNAVAILABLE",
@@ -209,6 +220,9 @@ class _Verdict:
     agent: registry.Agent | None = None
     version: int = 1
     supersedes: int | None = None
+    # How many of the proposed items survived stage 3. Defaults to zero so a refusal that
+    # happened *before* the novelty check reports the count it actually established: none.
+    novel_count: int = 0
 
 
 async def commit(
@@ -249,9 +263,10 @@ async def commit(
         threshold=NEW_BELIEF_THRESHOLD,
         evidence_ids=[item.id for item in evidence],
         source_classes=[item.source_class for item in evidence],
-        # Item 13 replaces this with the mechanical `(source_id, observed_at)` check against
-        # the belief's history. Until then every cited item is counted as new.
-        novel_count=len(evidence),
+        # What survived stage 3, while `evidence_ids` and `source_classes` above stay as
+        # proposed. The gap between them is the audit trail: a re-affirmation that cited three
+        # items and moved on one says so, and a refusal says `novel_count = 0`.
+        novel_count=verdict.novel_count,
         # Present whenever a predecessor was found — on the refusal to flip one as much as on
         # the version that supersedes it. Omitted entirely for a first belief.
         supersedes=verdict.supersedes,
@@ -311,17 +326,39 @@ async def _decide(
     version = 1 if previous is None else previous.version + 1
     supersedes = None if previous is None else previous.version
 
+    # Stage 3 — §2.2's novelty check, mechanical. It compares `(source_id, observed_at)`
+    # against what this belief already rests on, and nothing here reasons about the evidence
+    # or its plausibility. An id no document answers raises rather than reading as absent:
+    # a history with holes in it would call a duplicate new (§7.3).
+    known: tuple[Evidence, ...] = ()
+    if previous is not None:
+        try:
+            known = await beliefs.read_evidence(previous.evidence_ids, client=client)
+        except beliefs.BeliefStoreError:
+            return _Verdict("REJECT", "STORE_UNAVAILABLE", 0.0, agent, version, supersedes)
+    new = beliefs.novel(evidence, known)
+
+    # §6.3: "the claim must carry evidence that is **new**". A first belief has no history to
+    # be novel against, so this can only ever refuse a proposal that adds nothing to one that
+    # already exists — re-running the same observation is not a second reason to believe it.
+    if previous is not None and not new:
+        return _Verdict("REJECT", "NO_NEW_EVIDENCE", 0.0, agent, version, supersedes)
+
     # Stage 4 — the number is computed here and nowhere else (§4.1, §4.4). Whatever the
-    # Analyst may have asserted is not a parameter of this function.
-    conf = confidence(evidence, now=now)
+    # Analyst may have asserted is not a parameter of this function. It is computed over the
+    # **accumulated** set (§3.2), so corroboration works across time: an old contractual
+    # record and a fresh audit are two distinct source classes even though they arrived a
+    # fortnight apart, and `confidence()`'s per-class max is what "re-confirmation raises
+    # confidence via decay-reset" means in arithmetic.
+    conf = confidence((*known, *new), now=now)
     if conf < NEW_BELIEF_THRESHOLD:
-        return _Verdict("REJECT", "BELOW_THRESHOLD", conf, agent, version, supersedes)
+        return _Verdict("REJECT", "BELOW_THRESHOLD", conf, agent, version, supersedes, len(new))
 
     # Stage 5's conflict rule, as much of it as exists. A flip needs 0.70 and §6.3's
     # different-source-class corroboration; item 14 owns both, and until then the honest
     # answer is a refusal rather than a commit through the new-belief door.
     if previous is not None and previous.status != status:
-        return _Verdict("REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes)
+        return _Verdict("REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes, len(new))
 
     committed_at = now.astimezone(UTC).strftime(TIMESTAMP)
     proposed = beliefs.BeliefVersion(
@@ -333,7 +370,7 @@ async def _decide(
         status=status,
         confidence=conf,
         threshold=NEW_BELIEF_THRESHOLD,
-        evidence_ids=tuple(item.id for item in evidence),
+        evidence_ids=(*(previous.evidence_ids if previous else ()), *(item.id for item in new)),
         authority=f"{agent.id}@{agent.version} (standing: {agent.standing})",
         committed_at=committed_at,
         committed_by="memory-policy-engine",
@@ -344,11 +381,13 @@ async def _decide(
         on_expiry=ON_EXPIRY,
     )
     try:
-        await beliefs.append(proposed, evidence, client=client)
+        # Only the novel items are written: the rest are already stored, and `append()` is
+        # create-if-absent precisely so re-citing one is a no-op rather than a rewrite.
+        await beliefs.append(proposed, new, client=client)
     except beliefs.VersionConflict:
         # Another writer got this version number first. Losing is the correct outcome: §6 is
         # append-only, and the winner's version is the one the chain now runs through.
-        return _Verdict("REJECT", "VERSION_CONFLICT", conf, agent, version, supersedes)
+        return _Verdict("REJECT", "VERSION_CONFLICT", conf, agent, version, supersedes, len(new))
     except beliefs.BeliefStoreError:
-        return _Verdict("REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes)
-    return _Verdict("COMMIT", "ABOVE_THRESHOLD", conf, agent, version, supersedes)
+        return _Verdict("REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes, len(new))
+    return _Verdict("COMMIT", "ABOVE_THRESHOLD", conf, agent, version, supersedes, len(new))

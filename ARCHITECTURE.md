@@ -74,6 +74,8 @@ The mirror. Every proposed belief commit passes through:
 5. **Threshold + conflict rule** — 0.50 for a new belief; 0.70 **plus the different-source-class rule (§6.3)** for a status flip.
 6. **Outcome** — COMMIT (new version, supersession link, signature), REJECT (logged, standing counter incremented), or RETRACT (§6.4). Every outcome is signed and audited.
 
+**As built (ROADMAP item 13), stages 3 and 4.** Novelty compares `(source_id, observed_at)` pairs resolved from the `evidence/{id}` documents the current version cites — the pair, not the id and not the payload, so a duplicate cannot be renamed past the check. A proposal against an **existing** belief carrying nothing novel is `REJECT("NO_NEW_EVIDENCE")`, refused at stage 3 before the arithmetic runs; a first belief has no history to be novel against, so an evidence-free first claim is refused by stage 4 at confidence 0.00 instead. Stage 4 computes over the **accumulated** evidence set: a superseding version cites its predecessor's evidence plus the novel items, as §3.2 renders it. Reasoning in [`docs/adr/ADR-017`](./docs/adr/ADR-017-novelty-and-the-accumulated-evidence-set.md).
+
 ## 3. Canonical typed objects
 
 Four object shapes carry all authority-relevant data. Don't invent variants — a new endpoint or agent reuses these shapes.
@@ -215,7 +217,11 @@ base_weight:
   contractual_record           0.50
   agent_inference              0.15
   unverified_external_claim    0.00
+
+half_life_domain:              30 days, every domain
 ```
+
+The half-life is published here for the same reason the weights are ([`ADR-002`](./docs/adr/ADR-002-computed-confidence.md)): the defense of these numbers is that they are inspectable and fixed, not that they are optimal, and one that appeared in no document was neither. It is a single number until a second domain writes beliefs (ROADMAP item 21).
 
 Three properties fall straight out of the arithmetic, with no LLM in the loop:
 
@@ -294,7 +300,7 @@ Extracts typed evidence, detects semantic conflict with existing belief, propose
 
 The mirror of the Gateway, for beliefs (§2.2). Checks standing, domain authority, evidence novelty; *computes* confidence; versions, signs, commits or rejects or retracts. The actual authority over what the organization believes.
 
-**As built (item 10) — a deliberate stub; the full engine is Phase 4.** `provenance/policy.py` runs the §2.2 stages that item 5 and §4.3 already make free: the request-time registry read (standing must be `GOOD` **and** the domain must be in `memory_domains`; an unreadable registry is a `REJECT`, not a pass), `confidence()` as §4.3's noisy-OR over distinct source classes with age decay, the 0.50 new-belief threshold, then sign and `create`. What is deliberately absent: the novelty check (a first belief has no history to be novel against), the §6.3 conflict rule (a first belief is not a flip), supersession, `RETRACT`, a normalised `evidence/{id}` collection, and the standing-counter write of stage 6 — items 12–14. **It therefore cannot write a second version of a belief, and refuses rather than approximating one:** an existing v1 gets `REJECT(SUPERSESSION_UNSUPPORTED)`, because overwriting destroys the history §3.2 rests on and an unlinked v2 is a belief nothing can audit. The write is Firestore `create`, so a concurrent one loses rather than clobbers. Every outcome, refusals included, is signed and lands on a `belief.commit` span. Reasoning in [`docs/adr/ADR-014`](./docs/adr/ADR-014-execution-and-the-stub-policy-engine.md).
+**As built (items 10, 12 and 13).** `provenance/policy.py` runs §2.2 stages 2 through 6: the request-time registry read (standing must be `GOOD` **and** the domain must be in `memory_domains`; an unreadable registry is a `REJECT`, not a pass), the mechanical novelty check over `(source_id, observed_at)`, `confidence()` as §4.3's noisy-OR over distinct source classes with age decay across the accumulated evidence, the 0.50 new-belief threshold, then sign and append a real superseding version through `provenance/beliefs.py`. What is deliberately absent: §6.3's different-source-class rule and the 0.70 flip threshold (item 14), the standing-counter write of stage 6 (item 14), and `RETRACT` (§6.4, item 15). **A status flip is therefore refused rather than approximated** — `REJECT(FLIP_UNSUPPORTED)` carrying the arithmetic — because 0.70 without §6.3 would let one sensor set and clear its own alarm. The write is Firestore `create`, so a concurrent one loses rather than clobbers. Every outcome, refusals included, is signed and lands on a `belief.commit` span. Reasoning in [`docs/adr/ADR-014`](./docs/adr/ADR-014-execution-and-the-stub-policy-engine.md), [`ADR-016`](./docs/adr/ADR-016-the-versioned-belief-store.md) and [`ADR-017`](./docs/adr/ADR-017-novelty-and-the-accumulated-evidence-set.md).
 
 ### 5.11 Staleness Sweeper **[CODE]**
 
