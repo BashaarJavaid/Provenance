@@ -1,14 +1,17 @@
 """The Memory Policy Engine: the computed number, the refusals, and the superseding write.
 
-`ARCHITECTURE.md` §10's confidence rows belong to item 13 and §6.3's conflict rule to item
-14. What is checked here is only what the engine claims: §4.3's arithmetic over one source
-class, the §2.2 stage-2 standing and domain checks, the threshold, the re-affirmation that
-supersedes v1 (item 12), and the status flip it refuses until the rule governing one exists.
+`ARCHITECTURE.md` §10's confidence and novelty rows are item 13's and §6.3's conflict rule is
+item 14's. What is checked here is only what the engine claims: §4.3's arithmetic over the
+accumulated evidence, the §2.2 stage-2 standing and domain checks, stage 3's mechanical
+novelty check, the threshold, the re-affirmation that supersedes v1 (item 12), and the status
+flip it refuses until the rule governing one exists.
 
-The two confidence tests are the ones that would matter if every other guarantee held. If
-restating one observation twice moved the number, an agent could talk any belief over the
-threshold by repeating itself — which is the poisoning attack §6.3 exists to stop, and §4.3
-stops it with a `max` rather than with a model's opinion.
+The confidence and novelty tests are the ones that would matter if every other guarantee
+held, and they defend the same property from two sides. If restating one observation twice
+moved the number, an agent could talk any belief over the threshold by repeating itself —
+which is the poisoning attack §6.3 exists to stop. §4.3 stops the *arithmetic* half with a
+`max` over distinct source classes; §2.2 stage 3 stops the *bookkeeping* half by refusing the
+repetition outright. Neither consults a model.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -24,11 +28,15 @@ from google.api_core.exceptions import ServiceUnavailable
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from test_registry import FakeFirestore
 
-from provenance import policy, registry, telemetry
+from provenance import beliefs, policy, registry, telemetry
 
 _EXPORTER = attach_exporter()
 
 NOW = datetime(2026, 8, 22, 12, 0, 0, tzinfo=UTC)
+# A *second* observation of the same thing. §2.2 stage 3 keys novelty on `(source_id,
+# observed_at)`, so re-reading the same service an hour later is new evidence and handing the
+# same instant a fresh id is not — which is what makes repetition worthless to an attacker.
+LATER = NOW + timedelta(hours=1)
 ENTITY = "inventory-api"
 DOMAIN = "infrastructure"
 STATUS = "CONFIG_REGRESSION_PRONE"
@@ -54,6 +62,17 @@ def an_evidence(**overrides: Any) -> policy.Evidence:
             payload_hash="a" * 64,
             verifiable_by=f"re-read services/{ENTITY}",
         ),
+        **overrides,
+    )
+
+
+def a_later_evidence(**overrides: Any) -> policy.Evidence:
+    """The same sensor reading the same thing an hour on — novel by §2.2, same source class."""
+    stamp = LATER.strftime(policy.TIMESTAMP)
+    return an_evidence(
+        id=beliefs.evidence_id(f"firestore:services/{ENTITY}", stamp),
+        observed_at=stamp,
+        ingested_at=stamp,
         **overrides,
     )
 
@@ -122,6 +141,22 @@ def test_an_aged_observation_weighs_less_than_a_fresh_one() -> None:
     """§6.5: "beliefs weaken on their own". One half-life halves the weight."""
     old = an_evidence(observed_at=(NOW - timedelta(days=30)).strftime(policy.TIMESTAMP))
     assert policy.confidence([old], now=NOW) == pytest.approx(0.30)
+
+
+def test_age_decay_is_monotonic() -> None:
+    """§10's third confidence property: an older observation is never worth more.
+
+    The point is not the curve's shape but its direction. §6.5 has the Sweeper act on a
+    belief that drifts toward the threshold, and "drifts toward" is only true if age can
+    never buy confidence back. Checked across a ladder rather than at one point, because a
+    sign error inside the exponent passes any single-point test that fits it.
+    """
+    ages = [0, 1, 7, 30, 31, 90, 365, 3650]
+    values = [policy.confidence([an_evidence()], now=NOW + timedelta(days=days)) for days in ages]
+    assert all(a >= b for a, b in pairwise(values)), values
+    assert values[0] == pytest.approx(0.60)
+    assert values[ages.index(30)] == pytest.approx(0.30), "one half-life halves the weight"
+    assert values[-1] < 0.001, "a decade on, the observation is worth all but nothing"
 
 
 # --- §2.2, the pipeline ----------------------------------------------------------------------
@@ -203,7 +238,7 @@ def test_a_re_affirmation_commits_a_superseding_version(spans: InMemorySpanExpor
     first = commit(store)
     stored_v1 = dict(store.collections[VERSIONS]["1"])
 
-    second = commit(store, [an_evidence(id="ev-2")])
+    second = commit(store, [a_later_evidence()])
 
     assert first.outcome == "COMMIT" and first.version == 1
     assert (second.outcome, second.reason) == ("COMMIT", "ABOVE_THRESHOLD")
@@ -227,7 +262,7 @@ def test_a_status_flip_is_refused_until_the_conflict_rule_exists(
     store = a_store()
     commit(store)
 
-    flip = commit(store, [an_evidence(id="ev-2")], status="HEALTHY")
+    flip = commit(store, [a_later_evidence()], status="HEALTHY")
 
     assert (flip.outcome, flip.reason) == ("REJECT", "FLIP_UNSUPPORTED")
     assert flip.confidence == pytest.approx(0.60)
@@ -236,6 +271,113 @@ def test_a_status_flip_is_refused_until_the_conflict_rule_exists(
     span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
     assert span.attributes is not None
     assert span.attributes["provenance.belief.supersedes"] == 1
+
+
+def test_restating_one_source_is_not_a_second_reason_to_believe_it(
+    spans: InMemorySpanExporter,
+) -> None:
+    """ROADMAP item 13's verify line: a duplicate `(source_id, observed_at)` is not new.
+
+    This is the bookkeeping half of the poisoning defense. §4.3's `max` already makes the
+    repetition worth nothing arithmetically; stage 3 refuses it before the arithmetic runs,
+    so the trace says "you told us nothing new" rather than reporting a number as if a fresh
+    judgment had been made. A new id on the same instant does not help — the pair is what is
+    compared, so an attacker cannot rename its way past the check.
+    """
+    store = a_store()
+    commit(store)
+
+    repeat = commit(store, [an_evidence(), an_evidence(id="ev-renamed")])
+
+    assert (repeat.outcome, repeat.reason) == ("REJECT", "NO_NEW_EVIDENCE")
+    assert "2" not in store.collections[VERSIONS], "a repetition wrote a version"
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.evidence.novel_count"] == 0
+    assert span.attributes["provenance.evidence.ids"] == ("ev-1", "ev-renamed"), "as proposed"
+
+
+def test_a_first_belief_with_no_evidence_is_refused_by_the_arithmetic(
+    spans: InMemorySpanExporter,
+) -> None:
+    """An evidence-free claim is `BELOW_THRESHOLD`, never `NO_NEW_EVIDENCE`.
+
+    The two refusals mean different things and the distinction is the reason stage 3's gate
+    is guarded on there being a predecessor at all. "Nothing new" is a statement about a
+    belief that already exists; a first belief supported by nothing has told us nothing at
+    all, and what refuses it is ADR-002's arithmetic — confidence 0.00, exactly as a bare
+    assertion of `unverified_external_claim` is refused, and by the same door.
+    """
+    store = a_store()
+
+    empty = commit(store, [])
+
+    assert (empty.outcome, empty.reason) == ("REJECT", "BELOW_THRESHOLD")
+    assert empty.confidence == 0.0
+    assert store.collections.get(VERSIONS, {}) == {}
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.evidence.novel_count"] == 0
+
+
+def test_a_superseding_version_rests_on_everything_it_ever_rested_on(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§3.2's `#17 ev-[118]` → `#42 ev-[118,140,141]`, and §6.3's legitimate-update case.
+
+    The accumulated set is what makes corroboration work across time. A contractual record
+    from Aug 1 and an audit from Aug 15 are two distinct source classes even though they
+    arrived a fortnight apart, and only the union clears the 0.70 door item 14's flip rule
+    needs — 0.71 accumulated against 0.55 for the audit alone. A version that cited only what
+    its own proposal carried would make §6.3's worked example unreachable.
+    """
+    store = a_store()
+    flagged = an_evidence(id="ev-118", source_class="contractual_record")
+    commit(store, [flagged])
+
+    audited = an_evidence(
+        id="ev-140",
+        source_class="third_party_audit",
+        observed_at=(NOW + timedelta(days=15)).strftime(policy.TIMESTAMP),
+    )
+    second = asyncio.run(
+        policy.commit(
+            entity=ENTITY,
+            domain=DOMAIN,
+            status=STATUS,
+            evidence=[audited],
+            agent_id="sre-infra-agent",
+            now=NOW + timedelta(days=15),
+            client=store,
+        )
+    )
+
+    assert second.outcome == "COMMIT"
+    assert store.collections[VERSIONS]["2"]["evidence"] == ["ev-118", "ev-140"]
+    # 1 − (1 − 0.50·2^(-15/30))(1 − 0.55); the audit alone would be 0.55 and stop below 0.70.
+    assert second.confidence == pytest.approx(0.71, abs=0.005)
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.evidence.novel_count"] == 1
+    assert span.attributes["provenance.evidence.ids"] == ("ev-140",), "what was proposed"
+
+
+def test_evidence_the_store_cannot_produce_rejects_rather_than_committing(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§7.3 again: a history with holes in it must not read as a history with nothing in it.
+
+    If the cited evidence cannot be resolved, every proposal looks novel and a duplicate
+    walks straight through stage 3. Fail closed — the belief in force stands.
+    """
+    store = a_store()
+    commit(store)
+    store.collections[beliefs.EVIDENCE_COLLECTION].clear()
+
+    second = commit(store, [a_later_evidence()])
+
+    assert (second.outcome, second.reason) == ("REJECT", "STORE_UNAVAILABLE")
+    assert "2" not in store.collections[VERSIONS]
 
 
 # --- the span --------------------------------------------------------------------------------

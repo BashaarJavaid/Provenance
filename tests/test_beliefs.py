@@ -17,6 +17,7 @@ import asyncio
 import inspect
 import types
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 import pytest
@@ -32,14 +33,18 @@ STATUS = "CONFIG_REGRESSION_PRONE"
 
 
 def an_evidence(item_id: str = "ev-1", **overrides: Any) -> beliefs.Evidence:
-    return beliefs.Evidence(
-        id=item_id,
-        source_id=f"firestore:services/{ENTITY}",
-        source_class="verified_system_observation",
-        observed_at="2026-08-22T12:00:00Z",
-        ingested_at="2026-08-22T12:00:00Z",
-        payload_hash="a" * 64,
-        verifiable_by=f"re-read services/{ENTITY}",
+    # `replace`, as `test_policy.py`'s twin does: every field is named below, so passing
+    # `**overrides` to the constructor collides on any of them rather than overriding it.
+    return replace(
+        beliefs.Evidence(
+            id=item_id,
+            source_id=f"firestore:services/{ENTITY}",
+            source_class="verified_system_observation",
+            observed_at="2026-08-22T12:00:00Z",
+            ingested_at="2026-08-22T12:00:00Z",
+            payload_hash="a" * 64,
+            verifiable_by=f"re-read services/{ENTITY}",
+        ),
         **overrides,
     )
 
@@ -157,9 +162,11 @@ def test_an_unreachable_store_raises_rather_than_reading_as_absent() -> None:
         asyncio.run(beliefs.current(BELIEF_ID, client=store))
 
 
-def test_no_store_function_returns_an_optional_version() -> None:
+def test_no_store_function_returns_an_optional_version_or_evidence() -> None:
     # The same structural rule `registry.py` follows: `BeliefVersion | None` is one forgotten
-    # `if belief:` away from a missing belief reading as "no belief was there".
+    # `if belief:` away from a missing belief reading as "no belief was there". `Evidence` is
+    # on the list for item 13's sake — an unresolvable citation that reads as absent would
+    # make §2.2's novelty check compare against an emptier history than the belief has.
     for name, fn in vars(beliefs).items():
         if not inspect.isfunction(fn) or fn.__module__ != beliefs.__name__:
             continue
@@ -167,6 +174,7 @@ def test_no_store_function_returns_an_optional_version() -> None:
         if get_origin(returns) in (Union, types.UnionType):
             args = get_args(returns)
             assert not (beliefs.BeliefVersion in args and type(None) in args), name
+            assert not (beliefs.Evidence in args and type(None) in args), name
 
 
 # --- evidence (§3.3) ---------------------------------------------------------------------------
@@ -214,3 +222,64 @@ def test_a_malformed_version_document_raises() -> None:
 
     with pytest.raises(beliefs.BeliefStoreError):
         asyncio.run(beliefs.current(BELIEF_ID, client=store))
+
+
+# --- §2.2 stage 3, the novelty check (item 13) ---------------------------------------------------
+
+
+def test_a_duplicate_pair_is_not_new_and_the_same_source_later_is() -> None:
+    """`ARCHITECTURE.md` §10's novelty row, both halves, as a pure function.
+
+    §2.2 defines new as `(source_id, observed_at)` not already present — the pair, not the
+    id and not the payload. So a second reading of the same service an hour on is evidence
+    and a re-send of the same instant under a new id is not, which is what makes repetition
+    worthless to an attacker without anything having to judge intent.
+    """
+    known = [an_evidence("ev-1")]
+    renamed = an_evidence("ev-renamed")
+    later = an_evidence("ev-2", observed_at="2026-08-22T13:00:00Z")
+    elsewhere = an_evidence("ev-3", source_id="firestore:services/pricing-api")
+
+    assert beliefs.novel([renamed], known) == ()
+    assert beliefs.novel([later], known) == (later,)
+    assert beliefs.novel([elsewhere], known) == (elsewhere,)
+    assert beliefs.novel([renamed, later], known) == (later,), "order and filtering together"
+    assert beliefs.novel([renamed], []) == (renamed,), "nothing known, everything is new"
+
+
+def test_an_evidence_id_names_the_pair_it_stores() -> None:
+    """Content-addressed, so `append()`'s create-if-absent cannot store a disagreeing pair."""
+    first = beliefs.evidence_id("firestore:services/inventory-api", "2026-08-22T12:00:00Z")
+    assert first == beliefs.evidence_id("firestore:services/inventory-api", "2026-08-22T12:00:00Z")
+    assert first != beliefs.evidence_id("firestore:services/inventory-api", "2026-08-22T13:00:00Z")
+    assert first != beliefs.evidence_id("firestore:services/pricing-api", "2026-08-22T12:00:00Z")
+    assert first.startswith("ev-")
+
+
+def test_cited_evidence_reads_back_as_the_object_that_was_written() -> None:
+    store = FakeFirestore({})
+    written = (an_evidence("ev-1"), an_evidence("ev-2", source_class="third_party_audit"))
+    append(store, a_version(1, evidence_ids=("ev-1", "ev-2")), *written)
+
+    assert asyncio.run(beliefs.read_evidence(("ev-1", "ev-2"), client=store)) == written
+    assert asyncio.run(beliefs.read_evidence((), client=store)) == ()
+
+
+def test_a_citation_the_store_cannot_answer_raises_rather_than_being_dropped() -> None:
+    # A short tuple would make the missing item look like something nobody ever observed, and
+    # the next proposal to carry it would be counted as new (§7.3).
+    store = FakeFirestore({})
+    append(store, a_version(1, evidence_ids=("ev-1",)), an_evidence("ev-1"))
+    store.collections[beliefs.EVIDENCE_COLLECTION].clear()
+
+    with pytest.raises(beliefs.BeliefNotFound):
+        asyncio.run(beliefs.read_evidence(("ev-1",), client=store))
+
+
+def test_malformed_stored_evidence_raises() -> None:
+    store = FakeFirestore({})
+    append(store, a_version(1, evidence_ids=("ev-1",)), an_evidence("ev-1"))
+    store.collections[beliefs.EVIDENCE_COLLECTION]["ev-1"] = {"id": "ev-1"}
+
+    with pytest.raises(beliefs.BeliefStoreError):
+        asyncio.run(beliefs.read_evidence(("ev-1",), client=store))

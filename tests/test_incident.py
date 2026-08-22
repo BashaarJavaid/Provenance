@@ -24,6 +24,7 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -39,10 +40,12 @@ from opentelemetry.trace import StatusCode
 from pydantic import Field
 from test_registry import FakeFirestore
 
-from provenance import incident, policy, registry, telemetry
+from provenance import beliefs, incident, policy, registry, telemetry
 from provenance.synthetic import company
 
 _EXPORTER = attach_exporter()
+
+NOW = datetime(2026, 8, 22, 12, 0, 0, tzinfo=UTC)
 
 PLANNER_KEY = ec.generate_private_key(ec.SECP256R1())
 PLANNER_PEM = (
@@ -183,12 +186,15 @@ def a_verification(outcome: str = "CONFIRMED") -> str:
     )
 
 
-def run(replies: list[str], *, store: FakeFirestore | None = None) -> incident.IncidentResult:
+def run(
+    replies: list[str], *, store: FakeFirestore | None = None, now: datetime | None = None
+) -> incident.IncidentResult:
     """One incident, with every model call answered from `replies` in order."""
     model = FakeLlm(model="fake-model", replies=list(replies), prompts=[])
     return asyncio.run(
         incident.run_incident(
             a_trigger(),
+            now=now,
             client=store if store is not None else a_store(),
             planner_key=PLANNER_KEY,
             model_orchestrator=model,
@@ -464,6 +470,32 @@ def test_a_confirmed_verification_writes_one_belief_and_resolves(
     assert service["error_rate"] == company.service("inventory-api").error_rate
     assert list(store.collections["beliefs"]) == ["belief-inventory-api"]
     policy.verify_commit(result.belief, policy.public_key_pem())
+
+
+def test_two_incidents_sharing_a_predicate_store_two_distinct_observations() -> None:
+    """The evidence id names the observation, not the sentence the Planner wrote about it.
+
+    Until item 13 the id was `ev-{action.predicate_id()}` — a hash of the success predicate
+    — while `beliefs.append()` writes evidence create-if-absent. Two incidents whose Planner
+    happened to phrase the predicate identically therefore shared an id while observing at
+    different times, so the second write was discarded and the belief ended up citing a
+    timestamp nobody had observed, twice. `confidence()` decays from `observed_at`, so the
+    stale one is not cosmetic: it ages the fresh observation by however long ago the first ran.
+    """
+    store = a_store()
+    first = run(a_clean_run(), store=store, now=NOW)
+    second = run(a_clean_run(), store=store, now=NOW + timedelta(days=1))
+
+    assert first.belief is not None and second.belief is not None
+    assert (first.belief.version, second.belief.version) == (1, 2)
+
+    cited = store.collections["beliefs/belief-inventory-api/versions"]["2"]["evidence"]
+    assert len(set(cited)) == len(cited) == 2, f"one observation cited twice: {cited}"
+    stored = store.collections[beliefs.EVIDENCE_COLLECTION]
+    assert sorted(item["observed_at"] for item in stored.values()) == [
+        NOW.strftime(beliefs.TIMESTAMP),
+        (NOW + timedelta(days=1)).strftime(beliefs.TIMESTAMP),
+    ]
 
 
 def test_the_verification_span_carries_the_predicate_declared_before_execution(
