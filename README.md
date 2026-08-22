@@ -202,9 +202,9 @@ model. The response carries all of it: `execution`, `verification` and `belief`,
 when the path was not taken. Without the header it answers 403.
 
 Inject the fault first if you want the rollback to have something to fix
-(`scripts/inject_fault.py`); note that a second run against the same service will be refused
-at the belief write with `SUPERSESSION_UNSUPPORTED`, because the stub Policy Engine cannot
-write a version that supersedes one (item 12 is what can).
+(`scripts/inject_fault.py`); since item 12 a second run against the same service commits a
+**superseding version** of the belief rather than being refused — v1 is left exactly as it
+was written, and v2 links back to it.
 
 **Seed the synthetic company** — the entity model every incident recurs over:
 

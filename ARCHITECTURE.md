@@ -374,6 +374,8 @@ The division of labor is strict, and it is the pre-emptive answer to "isn't this
 
 Firestore is the single store of truth: entity-keyed reads and append-only versioned writes are exactly the document-store access pattern. No second datastore unless a demo step needs a cross-dataset join; none does. (See [`docs/adr/ADR-001`](./docs/adr/ADR-001-firestore-single-store.md).)
 
+**As built (ROADMAP item 12).** Three collections. A belief is a root document `beliefs/belief-{entity}` plus one **immutable document per version** at `beliefs/belief-{entity}/versions/{n}`, written with `create()` and never written again; evidence is normalised to `evidence/{id}` and versions cite ids, as §3.2 renders them. Supersession links point backwards only (`supersedes` on the newer version) and `superseded_by` is derived on read, so a committed version is never modified. There is no `current_version` pointer — the newest version that exists is the current one. `provenance/beliefs.py` is the store and decides nothing; `provenance/policy.py` is §2.2's pipeline and is the only thing that writes through it. Reasoning in [`docs/adr/ADR-016`](./docs/adr/ADR-016-the-versioned-belief-store.md).
+
 ## 7. Failure modes
 
 The judging criteria ask directly: how does the system recover if a worker agent loops or returns a hallucination? The answers fall out of the typed-action discipline rather than being bolted on. Default posture for anything ambiguous: **fail closed** — no execution, no belief commit, escalate.

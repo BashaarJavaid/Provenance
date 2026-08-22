@@ -1,9 +1,9 @@
-"""ROADMAP item 10's stub Policy Engine: the computed number, and the four ways to be refused.
+"""The Memory Policy Engine: the computed number, the refusals, and the superseding write.
 
-`ARCHITECTURE.md` §10's confidence rows belong to item 13 and the conflict rule to item 14.
-What is checked here is only what the stub claims: §4.3's arithmetic over one source class,
-the §2.2 stage-2 standing and domain checks, the threshold, and the refusal to write a second
-version of a belief it cannot link to the first.
+`ARCHITECTURE.md` §10's confidence rows belong to item 13 and §6.3's conflict rule to item
+14. What is checked here is only what the engine claims: §4.3's arithmetic over one source
+class, the §2.2 stage-2 standing and domain checks, the threshold, the re-affirmation that
+supersedes v1 (item 12), and the status flip it refuses until the rule governing one exists.
 
 The two confidence tests are the ones that would matter if every other guarantee held. If
 restating one observation twice moved the number, an agent could talk any belief over the
@@ -32,7 +32,8 @@ NOW = datetime(2026, 8, 22, 12, 0, 0, tzinfo=UTC)
 ENTITY = "inventory-api"
 DOMAIN = "infrastructure"
 STATUS = "CONFIG_REGRESSION_PRONE"
-BELIEF_ID = f"belief-{ENTITY}-1"
+BELIEF_ID = f"belief-{ENTITY}"
+VERSIONS = f"beliefs/{BELIEF_ID}/versions"
 
 
 @pytest.fixture
@@ -72,12 +73,16 @@ def a_store(**overrides: Any) -> FakeFirestore:
     )
 
 
-def commit(store: FakeFirestore, evidence: list[policy.Evidence] | None = None) -> Any:
+def commit(
+    store: FakeFirestore,
+    evidence: list[policy.Evidence] | None = None,
+    status: str = STATUS,
+) -> Any:
     return asyncio.run(
         policy.commit(
             entity=ENTITY,
             domain=DOMAIN,
-            status=STATUS,
+            status=status,
             evidence=evidence if evidence is not None else [an_evidence()],
             agent_id="sre-infra-agent",
             now=NOW,
@@ -130,12 +135,16 @@ def test_a_confirmed_observation_commits_the_first_belief(spans: InMemorySpanExp
     assert result.confidence == pytest.approx(0.60)
     assert result.belief_id == BELIEF_ID and result.version == 1
 
-    stored = store.collections["beliefs"][BELIEF_ID]
+    stored = store.collections[VERSIONS]["1"]
     assert stored["scope"] == "ENTITY"
     assert stored["status"] == STATUS
     assert stored["authority"] == "sre-infra-agent@v1 (standing: GOOD)"
     assert stored["confidence"] == pytest.approx(0.60)
     assert len(stored["evidence"]) == 1
+    assert stored["supersedes"] is None
+    # §6.5's decay clock, written at commit time so the Sweeper has something to consume.
+    assert (stored["half_life_days"], stored["on_expiry"]) == (30.0, "REVERIFY")
+    assert stored["expires_at"] == "2026-09-21T12:00:00Z"
     policy.verify_commit(result, policy.public_key_pem())
 
 
@@ -184,22 +193,49 @@ def test_evidence_below_the_threshold_does_not_write(spans: InMemorySpanExporter
     assert store.collections["beliefs"] == {}
 
 
-def test_an_existing_v1_is_rejected_rather_than_overwritten(spans: InMemorySpanExporter) -> None:
-    """Beliefs are append-only (§6). The stub cannot write a supersession link, so it refuses.
+def test_a_re_affirmation_commits_a_superseding_version(spans: InMemorySpanExporter) -> None:
+    """ROADMAP item 12's verify line, through the pipeline that owns the write.
 
-    Overwriting would destroy history the whole memory design rests on; writing an unlinked
-    v2 would leave a belief nothing can trace to its predecessor. Refusing is the only third
-    option, and item 14 is what removes the need for it.
+    The same status observed again is a re-affirmation, not a flip: v2 supersedes v1, v1 is
+    left exactly as it was committed, and the link points backwards only.
     """
     store = a_store()
     first = commit(store)
-    stored = dict(store.collections["beliefs"][BELIEF_ID])
+    stored_v1 = dict(store.collections[VERSIONS]["1"])
 
-    second = commit(store)
+    second = commit(store, [an_evidence(id="ev-2")])
 
-    assert first.outcome == "COMMIT"
-    assert (second.outcome, second.reason) == ("REJECT", "SUPERSESSION_UNSUPPORTED")
-    assert store.collections["beliefs"][BELIEF_ID] == stored, "v1 was modified"
+    assert first.outcome == "COMMIT" and first.version == 1
+    assert (second.outcome, second.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert second.version == 2
+    assert store.collections[VERSIONS]["1"] == stored_v1, "v1 was modified"
+    assert store.collections[VERSIONS]["2"]["supersedes"] == 1
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.belief.supersedes"] == 1
+
+
+def test_a_status_flip_is_refused_until_the_conflict_rule_exists(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§4.3 puts a flip behind 0.70 *plus* §6.3's different-source-class rule (item 14).
+
+    Letting one through the 0.50 new-belief door in the meantime would mean a single sensor
+    could set and clear its own alarm — the exact thing §6.3 exists to prevent. The refusal
+    still carries the arithmetic, so the trace shows what was proposed and why it stopped.
+    """
+    store = a_store()
+    commit(store)
+
+    flip = commit(store, [an_evidence(id="ev-2")], status="HEALTHY")
+
+    assert (flip.outcome, flip.reason) == ("REJECT", "FLIP_UNSUPPORTED")
+    assert flip.confidence == pytest.approx(0.60)
+    assert flip.version == 2
+    assert "2" not in store.collections[VERSIONS]
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.belief.supersedes"] == 1
 
 
 # --- the span --------------------------------------------------------------------------------

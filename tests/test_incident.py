@@ -462,7 +462,7 @@ def test_a_confirmed_verification_writes_one_belief_and_resolves(
     service = store.collections["services"]["inventory-api"]
     assert service["current_config_version"] == "v41"
     assert service["error_rate"] == company.service("inventory-api").error_rate
-    assert list(store.collections["beliefs"]) == ["belief-inventory-api-1"]
+    assert list(store.collections["beliefs"]) == ["belief-inventory-api"]
     policy.verify_commit(result.belief, policy.public_key_pem())
 
 

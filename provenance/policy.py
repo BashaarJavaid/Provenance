@@ -1,53 +1,55 @@
-"""The Memory Policy Engine — a stub of §2.2, enough to commit the first belief (item 10).
+"""The Memory Policy Engine — §2.2's pipeline (items 10 and 12).
 
 The mirror of the gateway: probabilistic recommends, deterministic decides, for beliefs as
 for actions (§1.1 property 2). Nothing here reasons. It reads standing, computes a number
 from a published formula, compares it to a threshold, signs, and writes — or refuses.
 
-**A stub, and the stub is the point.** Phase 4 owns the full engine (items 12–14); item 10
-owns exactly the stages that item 5 and §4.3 already make free, so that incident #1 ends in
-a belief rather than in an unwritten intention. What is here:
+Item 10 shipped this as a stub that could commit exactly one version and refused a second.
+Item 12 gave it the versioned store (`beliefs.py`), so a re-affirmation now commits a real
+superseding version and `SUPERSESSION_UNSUPPORTED` is gone rather than merely unused. What
+runs today:
 
 | §2.2 stage | Here |
 |---|---|
-| 1. typed-evidence validation | `Evidence` is §3.3's seven fields, constructed by code |
+| 1. typed-evidence validation | `beliefs.Evidence` is §3.3's seven fields, constructed by code |
 | 2. registry read, request-time | `registry.get_agent()`, standing GOOD **and** domain held |
-| 3. novelty check | **absent** — a first belief has no history to be novel against |
+| 3. novelty check | **absent** — item 13 owns it |
 | 4. computed confidence | `confidence()`, §4.3's noisy-OR (item 13 owns the full version) |
-| 5. threshold + conflict rule | threshold only — a first belief is not a flip (§6.3) |
+| 5. threshold + conflict rule | threshold for every version; §6.3's flip rule is item 14's |
 | 6. outcome | COMMIT or REJECT, signed, one `belief.commit` span |
 
-And what is deliberately not: supersession and RETRACT (§6.4), an `evidence/{id}` collection,
-the §6.3 conflict rule, and the standing-counter write §2.2 stage 6 names. A second version
-of a belief is therefore not something this module can produce — it `REJECT`s with
-`SUPERSESSION_UNSUPPORTED` rather than overwriting v1 or writing an unlinked v2. Committing
-a belief the store cannot then trace back to its predecessor is worse than not committing.
+**A status flip is refused, not approximated.** §4.3 puts a flip behind 0.70 *plus* §6.3's
+different-source-class rule, and neither exists until item 14. Letting a flip through the
+0.50 door in the meantime would mean a single sensor could set and clear its own alarm —
+the one thing §6.3 exists to prevent — so a proposal whose status differs from the current
+version is answered `REJECT("FLIP_UNSUPPORTED")`. Same status, new evidence, is a
+re-affirmation: v2 supersedes v1, and v1 is left exactly as it was committed.
 
-Fail-closed (§7.3): a registry that cannot be read is a REJECT, not a commit; the write is a
-`create()` so a concurrent one loses rather than clobbers; and every outcome, including every
-refusal, lands on a span. `commit()` never raises for a belief it declined to write — the
-caller must not be able to swallow a refusal into "nothing happened", the same reason
-`gateway.authorize()` returns every terminal outcome as a `Decision`.
+Also still absent by design: the standing-counter write §2.2 stage 6 names (item 14), and
+`RETRACT` (§6.4, item 15).
+
+Fail-closed (§7.3): a registry that cannot be read is a REJECT, not a commit; the store's
+write is a `create()` so a concurrent one loses rather than clobbers; and every outcome,
+including every refusal, lands on a span. `commit()` never raises for a belief it declined
+to write — the caller must not be able to swallow a refusal into "nothing happened", the
+same reason `gateway.authorize()` returns every terminal outcome as a `Decision`.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from google.api_core.exceptions import AlreadyExists, GoogleAPIError
-from google.cloud import firestore
 from services.gateway import signing
 
-from provenance import registry, telemetry
+from provenance import beliefs, registry, telemetry
+from provenance.beliefs import TIMESTAMP, Evidence
 from provenance.telemetry import BeliefOutcome, SourceClass, Standing
-
-COLLECTION = "beliefs"
 
 # §4.3's published table, verbatim. `unverified_external_claim` is 0.00 — that is the
 # poisoning defense as arithmetic rather than as a model's opinion, and it is why a change
@@ -64,8 +66,12 @@ BASE_WEIGHT: dict[SourceClass, float] = {
 # one domain writing beliefs there is nothing yet to vary it by.
 HALF_LIFE_DAYS = 30.0
 
+# §6.5's two expiry behaviours. The Sweeper (Phase 9) is what consumes this; item 12 writes
+# it so that beliefs committed before the Sweeper exists still carry a decay clock.
+ON_EXPIRY = "REVERIFY"
+
 # §4.3: "0.50 for a new belief". The flip threshold (0.70) has no caller until item 14,
-# because a flip needs a belief to flip.
+# because a flip is refused outright until the rule that governs it exists.
 NEW_BELIEF_THRESHOLD = 0.50
 
 # Closed, for the same reason `gateway.DecisionReason` is closed: this lands on a span, and
@@ -76,31 +82,10 @@ CommitReason = Literal[
     "STANDING_NOT_GOOD",
     "DOMAIN_NOT_HELD",
     "REGISTRY_UNAVAILABLE",
-    "SUPERSESSION_UNSUPPORTED",
+    "FLIP_UNSUPPORTED",
+    "VERSION_CONFLICT",
     "STORE_UNAVAILABLE",
 ]
-
-# Matches credentials.py and synthetic/company.py: ISO-8601, UTC, `Z` suffix. Public because
-# item 10's control loop stamps the Evidence it constructs with the same format.
-TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
-
-
-@dataclass(frozen=True)
-class Evidence:
-    """§3.3's seven fields. Constructed by code from something code measured, never by a model.
-
-    `verifiable_by` is the field that makes the rest checkable: it names how a third party
-    would re-derive this item. For incident #1 that is a re-read of `services/inventory-api`,
-    which is exactly the read the executor performed.
-    """
-
-    id: str
-    source_id: str
-    source_class: SourceClass
-    observed_at: str
-    ingested_at: str
-    payload_hash: str
-    verifiable_by: str
 
 
 @dataclass(frozen=True)
@@ -189,11 +174,6 @@ def verify_commit(commit_: BeliefCommit, public_key_pem_: str) -> None:
 # --- §4.3, the computed number ------------------------------------------------------------
 
 
-def payload_hash(payload: object) -> str:
-    """`sha256` of what was measured. §3.3 stores the hash; the payload is not authority."""
-    return hashlib.sha256(repr(payload).encode()).hexdigest()
-
-
 def _parse(timestamp: str) -> datetime:
     return datetime.strptime(timestamp, TIMESTAMP).replace(tzinfo=UTC)
 
@@ -216,27 +196,6 @@ def confidence(evidence: Sequence[Evidence], *, now: datetime) -> float:
     return 1 - product
 
 
-# --- the store -----------------------------------------------------------------------------
-
-_store: firestore.AsyncClient | None = None
-
-
-def _default_client() -> firestore.AsyncClient:
-    """The shared connection, built lazily so importing this module needs no credentials."""
-    global _store
-    if _store is None:
-        _store = firestore.AsyncClient()
-    return _store
-
-
-def _document(belief_id: str, client: Any | None) -> Any:
-    return (
-        (client if client is not None else _default_client())
-        .collection(COLLECTION)
-        .document(belief_id)
-    )
-
-
 # --- §2.2 ------------------------------------------------------------------------------------
 
 
@@ -248,6 +207,8 @@ class _Verdict:
     reason: CommitReason
     confidence: float
     agent: registry.Agent | None = None
+    version: int = 1
+    supersedes: int | None = None
 
 
 async def commit(
@@ -261,11 +222,9 @@ async def commit(
     client: Any | None = None,
 ) -> BeliefCommit:
     """Run §2.2 on one proposed belief. Returns a signed outcome; a REJECT is not an error."""
-    version = 1  # A first belief. The version that follows one is item 14's.
-    belief_id = f"belief-{entity}-{version}"
+    belief_id = f"belief-{entity}"
     verdict = await _decide(
         belief_id=belief_id,
-        version=version,
         entity=entity,
         domain=domain,
         status=status,
@@ -274,14 +233,14 @@ async def commit(
         now=now,
         client=client,
     )
-    signed = _sign(belief_id, version, verdict.outcome, verdict.reason, verdict.confidence)
+    signed = _sign(belief_id, verdict.version, verdict.outcome, verdict.reason, verdict.confidence)
 
     with telemetry.belief_commit(
         agent_id=agent_id,
         agent_version="unknown" if verdict.agent is None else verdict.agent.version,
         standing=_standing(verdict.agent),
         belief_id=belief_id,
-        belief_version=version,
+        belief_version=verdict.version,
         scope="ENTITY",
         domain=domain,
         entity=entity,
@@ -290,10 +249,12 @@ async def commit(
         threshold=NEW_BELIEF_THRESHOLD,
         evidence_ids=[item.id for item in evidence],
         source_classes=[item.source_class for item in evidence],
-        # Every item of a first belief is novel: there is no history for it not to be new
-        # against. The mechanical `(source_id, observed_at)` check is item 13's.
+        # Item 13 replaces this with the mechanical `(source_id, observed_at)` check against
+        # the belief's history. Until then every cited item is counted as new.
         novel_count=len(evidence),
-        # No `supersedes`: this module cannot produce a version that follows one.
+        # Present whenever a predecessor was found — on the refusal to flip one as much as on
+        # the version that supersedes it. Omitted entirely for a first belief.
+        supersedes=verdict.supersedes,
     ) as rec:
         rec.set_outcome(outcome=signed.outcome, reason=signed.reason, signature=signed.signature)
     return signed
@@ -311,7 +272,6 @@ def _standing(agent: registry.Agent | None) -> Standing:
 async def _decide(
     *,
     belief_id: str,
-    version: int,
     entity: str,
     domain: str,
     status: str,
@@ -320,7 +280,13 @@ async def _decide(
     now: datetime,
     client: Any | None,
 ) -> _Verdict:
-    """§2.2's stages. The earliest refusal wins, and the write is the last thing that happens."""
+    """§2.2's stages, in order. The earliest refusal wins, and the write happens last.
+
+    Stage 2 runs before the store is touched, which is why a refusal there reports version 1
+    and no `supersedes`: an agent whose standing has not been checked does not get a read of
+    institutional memory performed on its behalf, and the span's `decision.reason` says
+    plainly that the write never reached the store.
+    """
     # Stage 2 — the registry, read at request time (§1.1 property 4). A DEGRADED agent's
     # memory writes are rejected outright (§3.4); an unreadable registry is the same answer,
     # because an authority check that did not happen is not one that passed (§7.3).
@@ -333,33 +299,56 @@ async def _decide(
     if domain not in agent.memory_domains:
         return _Verdict("REJECT", "DOMAIN_NOT_HELD", 0.0, agent)
 
+    # The version at stake. A belief with no history is v1; one with a v1 in force is v2, and
+    # `current()` raising rather than returning `None` is what keeps "the store was
+    # unreadable" from being mistaken for "there is nothing here" (§7.3).
+    try:
+        previous: beliefs.BeliefVersion | None = await beliefs.current(belief_id, client=client)
+    except beliefs.BeliefNotFound:
+        previous = None
+    except beliefs.BeliefStoreError:
+        return _Verdict("REJECT", "STORE_UNAVAILABLE", 0.0, agent)
+    version = 1 if previous is None else previous.version + 1
+    supersedes = None if previous is None else previous.version
+
     # Stage 4 — the number is computed here and nowhere else (§4.1, §4.4). Whatever the
     # Analyst may have asserted is not a parameter of this function.
     conf = confidence(evidence, now=now)
     if conf < NEW_BELIEF_THRESHOLD:
-        return _Verdict("REJECT", "BELOW_THRESHOLD", conf, agent)
+        return _Verdict("REJECT", "BELOW_THRESHOLD", conf, agent, version, supersedes)
 
-    document = {
-        "id": belief_id,
-        "version": version,
-        "scope": "ENTITY",
-        "domain": domain,
-        "entity": entity,
-        "status": status,
-        "confidence": conf,
-        "threshold": NEW_BELIEF_THRESHOLD,
-        "evidence": [asdict(item) for item in evidence],
-        "authority": f"{agent.id}@{agent.version} (standing: {agent.standing})",
-        "committed_at": now.astimezone(UTC).strftime(TIMESTAMP),
-        "committed_by": "memory-policy-engine",
-        "signature": _sign(belief_id, version, "COMMIT", "ABOVE_THRESHOLD", conf).signature,
-    }
+    # Stage 5's conflict rule, as much of it as exists. A flip needs 0.70 and §6.3's
+    # different-source-class corroboration; item 14 owns both, and until then the honest
+    # answer is a refusal rather than a commit through the new-belief door.
+    if previous is not None and previous.status != status:
+        return _Verdict("REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes)
+
+    committed_at = now.astimezone(UTC).strftime(TIMESTAMP)
+    proposed = beliefs.BeliefVersion(
+        belief_id=belief_id,
+        version=version,
+        scope="ENTITY",
+        domain=domain,
+        entity=entity,
+        status=status,
+        confidence=conf,
+        threshold=NEW_BELIEF_THRESHOLD,
+        evidence_ids=tuple(item.id for item in evidence),
+        authority=f"{agent.id}@{agent.version} (standing: {agent.standing})",
+        committed_at=committed_at,
+        committed_by="memory-policy-engine",
+        signature=_sign(belief_id, version, "COMMIT", "ABOVE_THRESHOLD", conf).signature,
+        supersedes=supersedes,
+        half_life_days=HALF_LIFE_DAYS,
+        expires_at=(now + timedelta(days=HALF_LIFE_DAYS)).astimezone(UTC).strftime(TIMESTAMP),
+        on_expiry=ON_EXPIRY,
+    )
     try:
-        # `create`, not `set`: §6 makes beliefs append-only, and this module cannot write the
-        # supersession link a v2 would need. Losing the race is the correct outcome.
-        await _document(belief_id, client).create(document)
-    except AlreadyExists:
-        return _Verdict("REJECT", "SUPERSESSION_UNSUPPORTED", conf, agent)
-    except GoogleAPIError:
-        return _Verdict("REJECT", "STORE_UNAVAILABLE", conf, agent)
-    return _Verdict("COMMIT", "ABOVE_THRESHOLD", conf, agent)
+        await beliefs.append(proposed, evidence, client=client)
+    except beliefs.VersionConflict:
+        # Another writer got this version number first. Losing is the correct outcome: §6 is
+        # append-only, and the winner's version is the one the chain now runs through.
+        return _Verdict("REJECT", "VERSION_CONFLICT", conf, agent, version, supersedes)
+    except beliefs.BeliefStoreError:
+        return _Verdict("REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes)
+    return _Verdict("COMMIT", "ABOVE_THRESHOLD", conf, agent, version, supersedes)
