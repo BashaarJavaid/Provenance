@@ -171,11 +171,30 @@ gcloud auth login && gcloud auth application-default login
 **Deploy** — one command from a clean checkout, and it checks its own result:
 
 ```bash
-./scripts/deploy.sh        # PROJECT_ID, REGION and SERVICE override the defaults
+PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" PROVENANCE_TRIGGER_TOKEN=... \
+  ./scripts/deploy.sh      # PROJECT_ID, REGION and SERVICE override the defaults
 ```
+
+Both variables are required since item 9. The Remediation Planner signs its own gateway
+credential and the registry stores no private halves, so the PEM has to arrive from outside
+the repo; the trigger token guards `POST /trigger`, which spends model tokens on every call
+against a fixed credit.
 
 Live: **https://provenance-808273007560.us-central1.run.app** (`/health` for the service
 state). The service is public and runs at `min-instances=0`, so it bills nothing idle.
+
+**Wake the fleet** — one trigger, one incident, one signed decision. Nothing executes yet
+(that is item 10); the response is what the gateway decided:
+
+```bash
+curl -X POST https://provenance-808273007560.us-central1.run.app/trigger \
+  -H 'Content-Type: application/json' -H "X-Provenance-Token: ${PROVENANCE_TRIGGER_TOKEN}" \
+  -d '{"target":"inventory-api","observed_value":0.38,"observed_at":"2026-08-21T14:06:00Z"}'
+```
+
+It takes about a minute: three sequential `gemini-2.5-pro` calls classify the deviation,
+diagnose it, and turn it into one typed `ROLLBACK_CONFIG` action, which the risk table scores
+`1 + 1 + 0 + 0 = 2` and auto-approves. Without the header it answers 403.
 
 **Seed the synthetic company** — the entity model every incident recurs over:
 

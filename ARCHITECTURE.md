@@ -251,6 +251,8 @@ Reduces raw inbound data to typed facts; tokenizes PII that survived Model Armor
 
 Classifies the deviation, recalls entity-level *and* class-level beliefs (§6.6), routes to domain agent(s). Wake-on-event against the live trigger stream.
 
+**As built (item 9).** The trigger stream is `POST /trigger` on the Cloud Run service, guarded by a shared-secret header — a Firestore listener would need an always-warm instance the cost ceiling forbids (`docs/adr/ADR-013`). Of the three verbs only *classify* is reasoning and lives in `provenance/agents/orchestrator.py`; recall is a store lookup and routing is a table lookup, and both are deterministic code in `provenance/incident.py`, where they can be tested. The whole loop is an ADK `Workflow` — ADR-007's Graph Runtime, taken literally — in which §7.1's one re-plan is an actual edge back to the Planner. Recall returns empty until item 16. The Orchestrator holds no registry record: it proposes no action and writes no belief, so §3.4 has nothing to record about it.
+
 ### 5.4 Domain agents **[LLM]** — Gemini 2.5 Pro
 
 - **SRE/Infra Agent** — diagnoses infra anomalies against prior belief; proposes remediation.
@@ -261,6 +263,8 @@ Adding a domain must cost one agent file and one registry entry, and zero lines 
 ### 5.5 Remediation Planner **[LLM]** — Gemini 2.5 Pro
 
 Converts a diagnosis into exactly one typed Action (§3.1) with declared blast radius, reversibility, evidence references, and a success predicate. Never free-form text. A malformed emission is returned once; a second malformed emission escalates the incident (§7.1).
+
+**As built (item 9).** "Never free-form text" is structural, not instructed: the agent carries an ADK `output_schema`, so the response is constrained to §3.1's eight fields and prose is not an available answer. What it emits is still only a proposal — `action.validate()` overrules the declared tier against the entity model and the declared reversibility and blast radius against the tool registry, so understating any of the three fails validation rather than lowering the score. The retry count lives on the control loop's state, never on the agent.
 
 ### 5.6 Agent Registry **[CODE]**
 
@@ -367,7 +371,7 @@ The judging criteria ask directly: how does the system recover if a worker agent
 ### 7.1 Hallucinated actions and looping agents
 
 - **A hallucinated action dies at schema validation, before the gateway ever sees it.** A fabricated tool, a nonexistent target, or free-form text is rejected mechanically and returned to the Planner exactly once; a second malformed emission escalates the incident to a human.
-  *"Before the gateway" and §2.1's "stage 1" describe one design.* Validation is `provenance/action.py`, a standalone pure function run first, and a rejection there reaches none of the stages that follow — no identity check, no registry read, no ABAC, no risk score. The retry budget is `action.MALFORMED_RETRY_BUDGET` (1); the control loop keeps the count, not the Planner.
+  *"Before the gateway" and §2.1's "stage 1" describe one design.* Validation is `provenance/action.py`, a standalone pure function run first, and a rejection there reaches none of the stages that follow — no identity check, no registry read, no ABAC, no risk score. The retry budget is `action.MALFORMED_RETRY_BUDGET` (1); the control loop keeps the count, not the Planner. **As built (item 9):** that loop is `provenance/incident.py`, and the re-plan is an edge in the ADK graph from the validation node back to the Planner rather than a loop inside a prompt — the rejection reason is fed back with it, since a re-plan with no feedback is only a second roll of the dice.
 - **Loops are bounded by construction.** Every incident carries a retry budget: one bounded re-plan after a `REFUTED` verification, then mandatory escalation. No agent owns its own iteration count — the control loop does, in code.
 - **A plausible-but-wrong action is caught downstream.** If a hallucinated diagnosis produces an action that validates, it still faces the risk table on objective properties and verification against its pre-declared success predicate. A wrong action that executes gets `REFUTED`, and the refutation becomes a learned negative belief — the failure teaches the fleet instead of just costing it.
 
@@ -403,10 +407,11 @@ A fleet of agents is invisible. Demo & Production Readiness is 30% of the score,
 
 ### 8.1 The span vocabulary
 
-Four span shapes carry every authority-relevant event, one per decision the architecture makes. Defined in `provenance/telemetry.py` before any agent existed (ROADMAP item 2), so the six surfaces below read one contract rather than whatever each emitter happened to attach.
+Five span shapes carry every authority-relevant event, one per decision the architecture makes. Four were defined in `provenance/telemetry.py` before any agent existed (ROADMAP item 2), so the six surfaces below read one contract rather than whatever each emitter happened to attach; the fifth is the incident root, which item 2 deferred because until a control loop existed there was nothing for the other four to hang from.
 
 | Span | Emitted by | Carries |
 |---|---|---|
+| `provenance.incident` | the control loop (§5.3) | `incident.{id,trigger_target,trigger_signal,domain,routed_to,predicate_id,malformed_attempts,outcome}` |
 | `provenance.authorization.decision` | Agent Gateway (§2.1) | `agent.{id,version,standing}`, `action.{class,target,tier,blast_radius,reversible,evidence_ids}`, the full §4.2 arithmetic as `risk.{base,criticality,blast,irreversibility,score}`, and `decision.{outcome,stage,reason,signature}` |
 | `provenance.belief.commit` | Memory Policy Engine (§2.2) | `belief.{id,version,scope,domain,entity,status,confidence,threshold,supersedes}`, `evidence.{ids,source_classes,novel_count}`, and `decision.{outcome,reason,signature}` |
 | `provenance.verification.outcome` | Verification Agent (§7.2) | `verification.{outcome,predicate_id,model,attempt,belief_written}` plus the action it verified |
@@ -416,9 +421,13 @@ Three rules make the stream usable as an audit log rather than as debug output:
 
 - **Identifiers, hashes, enums and numbers only — never content.** No payload text, no prompt, no model output, no rationale prose. Evidence appears as IDs and source classes; what an evidence item *said* stays out. This is what item 26's "raw inbound text never appears in the trace" is checked against.
 - **The risk breakdown travels with the decision.** The gateway ledger and the approval card (§8.2, item 31) both render component-by-component arithmetic, and both read this stream — so the components are span attributes, and the emitted score must equal their sum or the emit fails.
-- **Fail-closed (§7.3).** Required fields are typed; an out-of-vocabulary value raises at emit; a span that exits without recording an outcome is marked `ERROR`. An unfinished decision must not read as a clean one. `DENY`, `REJECT` and `REFUTED` set `ERROR`; `INCONCLUSIVE` does not — ambiguity is an honest result, not a failure.
+- **Fail-closed (§7.3).** Required fields are typed; an out-of-vocabulary value raises at emit; a span that exits without recording an outcome is marked `ERROR`. An unfinished decision must not read as a clean one. `DENY`, `REJECT`, `REFUTED`, `DENIED`, `ESCALATED` and `UNROUTABLE` set `ERROR`; `INCONCLUSIVE` and `HELD` do not — ambiguity is an honest result and an incident waiting on a human is working exactly as §2.1 stage 7 designed it.
 
 **Amended in item 7 — the authorization span's fields are optional below `agent.{id,version}`.** §2.1's earliest stages terminate before the facts the shape originally required exist: a proposal rejected at schema validation has no validated action to describe, and one rejected because Firestore was unreachable has no standing to report. Requiring them would have forced either a fifth span shape or two whole denial classes missing from the audit stream, and §2.1 stage 6 — "every outcome is ECDSA-signed into the audit log, including denials" — admits neither. So `standing` and the six `action.*` attributes may be absent; `agent.id` and `agent.version` stay required, because they come off the presented credential, which is on every path. **Absent means omitted, never emitted empty** — a span carrying `standing: ""` would read as a standing that was read and found blank. Optional widened what may be *missing*, not what may be *present*: an out-of-vocabulary value still raises. Four shapes, no new attribute key.
+
+**Added in item 9 — `provenance.incident`, the root span.** Item 2 shipped four shapes and recorded that the root "arrives with the Orchestrator in item 9", under the condition that the module, this section and `tests/test_telemetry_schema.py` move in one commit. It is opened with only the three facts that exist at wake-on-event time (`id`, `trigger_target`, `trigger_signal`); the domain, the routed-to agent, the predicate hash and the malformed count arrive through the recorder, so a span never claims knowledge the loop did not have when it stopped. `domain`/`routed_to` are absent on an `UNROUTABLE` incident and `predicate_id` on one that produced no valid Action — the same "absent means omitted" rule the authorization span follows. `outcome` is one of `AUTHORIZED` / `HELD` / `DENIED` / `ESCALATED` / `UNROUTABLE`.
+
+`predicate_id` is `sha256(success_predicate)[:16]` (`action.predicate_id`), and carrying it here is what makes §3.1's "declared **before** execution" checkable rather than asserted: the id is on the incident span before anything runs, and item 10's `verification.outcome` span carries the same id afterwards. The predicate's *text* never reaches a span — the redaction rule above.
 
 The one deviation from "one stream, both destinations": Cloud **Trace** export is wired; Cloud **Logging** arrives with the first component that logs. On Cloud Run stdout reaches Cloud Logging without any exporter.
 
@@ -478,7 +487,8 @@ Verification criteria per component — these are the source of the `verify:` li
 | Sweeper | Expiry is consumed | Expire a belief with no re-verification source; assert it is `UNKNOWN(stale)`, excluded from recall, never deleted |
 | Recall | Index nominates, store decides | Seed a RETRACTED belief whose statement is the closest embedding match; assert it is never handed to the Orchestrator |
 | Verification | Three-valued, honest | Fault-inject a failed rollback → `REFUTED` → negative belief written; force ambiguity → `INCONCLUSIVE` → nothing written |
-| Bounded retry | The loop owns the count | Two consecutive `REFUTED` outcomes escalate; no third attempt occurs |
+| Bounded retry | The loop owns the count | Two consecutive `REFUTED` outcomes escalate; no third attempt occurs. For the *malformed* budget (item 9): one bad emission is re-planned with the rejection reason in the prompt, a second escalates, and the Planner is never asked a third time — asserted by counting the model's unconsumed replies |
+| Control loop | One trigger, one typed proposal, and no path to the gateway but the graph | The injected `inventory-api` spike produces exactly one `provenance.authorization.decision` span, scoring 1+1+0+0=2, APPROVE; a classification outside the routing table ends the incident `UNROUTABLE` rather than defaulting to an agent |
 | Injection arc | The gateway holds when filters leak | End-to-end: the §10-spec payload passes Model Armor and the sanitizer, the dangerous action is proposed, and the gateway holds it at score 11 |
 | Poisoning arc | Arithmetic defense | End-to-end: unverifiable "cleared" claim → confidence unmoved → rejected → three attempts → DEGRADED on the registry panel |
 | Tracing | One stream, defined shapes, no raw content | Assert each shape's span name and exact attribute set against an in-memory exporter; nested shapes share a trace ID; a risk score that doesn't equal its components and an out-of-vocabulary value both raise; no attribute key or value carries payload or model text |

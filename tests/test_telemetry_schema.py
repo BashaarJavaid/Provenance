@@ -112,7 +112,24 @@ def _emit_reasoning() -> None:
         )
 
 
-ALL_EMITTERS = (_emit_authorization, _emit_belief, _emit_verification, _emit_reasoning)
+def _emit_incident() -> None:
+    """Incident #1's shape (§13): a trigger on inventory-api, routed, authorized."""
+    with telemetry.incident(
+        incident_id="inc-2026-08-21-0001",
+        trigger_target="inventory-api",
+        trigger_signal="error_rate",
+    ) as rec:
+        rec.set_routing(domain="infrastructure", routed_to="sre-infra-agent")
+        rec.set_outcome(outcome="AUTHORIZED", malformed_attempts=0, predicate_id="9f2c1ab304de5567")
+
+
+ALL_EMITTERS = (
+    _emit_incident,
+    _emit_authorization,
+    _emit_belief,
+    _emit_verification,
+    _emit_reasoning,
+)
 
 
 # --- one test per shape ---------------------------------------------------------------
@@ -248,6 +265,56 @@ def test_reasoning_chain_shape(spans: InMemorySpanExporter) -> None:
         "provenance.reasoning.output_tokens",
         "provenance.recall.belief_ids",
     }
+
+
+def test_incident_shape(spans: InMemorySpanExporter) -> None:
+    _emit_incident()
+    span = _only(spans)
+    assert span.name == "provenance.incident"
+    assert _keys(span) == {
+        "provenance.incident.id",
+        "provenance.incident.trigger_target",
+        "provenance.incident.trigger_signal",
+        "provenance.incident.domain",
+        "provenance.incident.routed_to",
+        "provenance.incident.predicate_id",
+        "provenance.incident.malformed_attempts",
+        "provenance.incident.outcome",
+    }
+
+
+def test_an_unroutable_incident_carries_no_routing_and_no_predicate(
+    spans: InMemorySpanExporter,
+) -> None:
+    """An incident that never found an agent must not claim one, and never declared a
+    predicate to hash. Same rule as a denial carrying no risk score (item 7)."""
+    with telemetry.incident(
+        incident_id="inc-2",
+        trigger_target="inventory-api",
+        trigger_signal="error_rate",
+    ) as rec:
+        rec.set_outcome(outcome="UNROUTABLE", malformed_attempts=0)
+    keys = _keys(_only(spans))
+    assert "provenance.incident.domain" not in keys
+    assert "provenance.incident.routed_to" not in keys
+    assert "provenance.incident.predicate_id" not in keys
+
+
+def test_a_held_incident_is_not_an_error_but_an_escalated_one_is(
+    spans: InMemorySpanExporter,
+) -> None:
+    """An incident parked on a human is working as designed (§2.1 stage 7); one the fleet
+    could not turn into a valid action is not."""
+    for outcome in ("HELD", "ESCALATED"):
+        with telemetry.incident(
+            incident_id=f"inc-{outcome}",
+            trigger_target="inventory-api",
+            trigger_signal="error_rate",
+        ) as rec:
+            rec.set_outcome(outcome=outcome, malformed_attempts=0)  # type: ignore[arg-type]
+    held, escalated = spans.get_finished_spans()
+    assert held.status.status_code is StatusCode.OK
+    assert escalated.status.status_code is StatusCode.ERROR
 
 
 def test_first_belief_omits_supersedes(spans: InMemorySpanExporter) -> None:

@@ -217,6 +217,24 @@ def test_the_two_worked_examples_validate_clean() -> None:
         rollback.target_tier = "tier1"  # type: ignore[misc]
 
 
+# --- the success predicate (item 9) -------------------------------------------------------
+
+
+def test_predicate_id_is_derived_from_the_predicate_not_assigned() -> None:
+    # Two Actions declaring the same predicate must hash the same, in this process and any
+    # other: item 9's incident span and item 10's verification span are matched by this id,
+    # and an id assigned per incident could never match across the two.
+    first = action.validate(a_proposal())
+    second = action.validate(a_proposal(target="pricing-api"))
+    assert action.predicate_id(first) == action.predicate_id(second)
+    assert len(action.predicate_id(first)) == 16
+
+    different = action.validate(
+        a_proposal(success_predicate="error_rate on inventory-api stays above 0.30")
+    )
+    assert action.predicate_id(different) != action.predicate_id(first)
+
+
 # --- the registry cross-check ADR-010 asked for ------------------------------------------
 
 
