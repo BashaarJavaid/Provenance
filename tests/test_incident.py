@@ -8,6 +8,11 @@ emission is returned exactly once and escalates on the second (§7.1), that an u
 classification ends the incident instead of guessing, and that a Planner understating a
 tier is rejected before the gateway rather than scored.
 
+Item 10 added the second half of the loop -- execute, verify, resolve -- and with it the
+three tests a live run cannot force: an INCONCLUSIVE verification (a cooperative model will
+not produce one on cue), a held incident proving it executed nothing, and an execution
+failure proving §7.3's posture.
+
 The fake model is the same idea as `tests/test_registry.py`'s `FakeFirestore`: the point of
 these tests is a *sequence* of emissions, and only a model whose next reply is known can
 express one.
@@ -18,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
@@ -30,10 +35,12 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 from pydantic import Field
 from test_registry import FakeFirestore
 
-from provenance import incident, registry, telemetry
+from provenance import incident, policy, registry, telemetry
+from provenance.synthetic import company
 
 _EXPORTER = attach_exporter()
 
@@ -73,8 +80,14 @@ class FakeLlm(BaseLlm):
         )
 
 
-def a_store(**overrides: Any) -> FakeFirestore:
-    record = registry.Agent(
+def a_store(*, sre: dict[str, Any] | None = None, **overrides: Any) -> FakeFirestore:
+    """The registry, plus the three collections item 10's executor and Policy Engine touch.
+
+    `sre` overrides the *domain* agent's record, which is the one the belief is written under
+    (§3.4: memory-domain authority is per agent). `overrides` still go to the Planner, so
+    every item-9 call site reads unchanged.
+    """
+    planner_record = registry.Agent(
         id="remediation-planner",
         version="v3",
         public_key=PLANNER_PEM,
@@ -83,8 +96,31 @@ def a_store(**overrides: Any) -> FakeFirestore:
         standing="GOOD",
         rejection_window=(),
     )
+    sre_record = registry.Agent(
+        id="sre-infra-agent",
+        version="v1",
+        public_key="",
+        tool_scope=(),
+        memory_domains=("infrastructure",),
+        standing="GOOD",
+        rejection_window=(),
+    )
+    service = company.service("inventory-api")
     return FakeFirestore(
-        {"remediation-planner": registry.to_document(replace(record, **overrides))}
+        {
+            "remediation-planner": registry.to_document(replace(planner_record, **overrides)),
+            "sre-infra-agent": registry.to_document(sre_record) | (sre or {}),
+        },
+        services={
+            "inventory-api": {
+                **asdict(service),
+                # The injected fault, as `scripts/inject_fault.py` writes it.
+                "error_rate": 0.38,
+                "healthy": False,
+            }
+        },
+        fault_injection={"inventory-api": {"error_rate_spike": True, "rollback_fails": False}},
+        beliefs={},
     )
 
 
@@ -137,6 +173,16 @@ def a_proposal(**overrides: Any) -> str:
     )
 
 
+def a_verification(outcome: str = "CONFIRMED") -> str:
+    return json.dumps(
+        {
+            "outcome": outcome,
+            "hypotheses_considered": 2,
+            "selected_hypothesis": "predicate_met",
+        }
+    )
+
+
 def run(replies: list[str], *, store: FakeFirestore | None = None) -> incident.IncidentResult:
     """One incident, with every model call answered from `replies` in order."""
     model = FakeLlm(model="fake-model", replies=list(replies), prompts=[])
@@ -148,8 +194,14 @@ def run(replies: list[str], *, store: FakeFirestore | None = None) -> incident.I
             model_orchestrator=model,
             model_domain=model,
             model_planner=model,
+            model_verification=model,
         )
     )
+
+
+# The four replies a clean incident #1 consumes, in order.
+def a_clean_run() -> list[str]:
+    return [a_classification(), a_diagnosis(), a_proposal(), a_verification()]
 
 
 # --- the happy path -----------------------------------------------------------------------
@@ -159,9 +211,9 @@ def test_one_trigger_produces_one_rollback_proposal_scoring_2_and_auto_approved(
     spans: InMemorySpanExporter,
 ) -> None:
     """Item 9's `verify:` line, with the model's cooperation stipulated rather than hoped for."""
-    result = run([a_classification(), a_diagnosis(), a_proposal()])
+    result = run(a_clean_run())
 
-    assert result.outcome == "AUTHORIZED"
+    assert result.outcome == "RESOLVED"
     assert result.action is not None
     assert (result.action.action_class, result.action.target) == (
         "ROLLBACK_CONFIG",
@@ -178,13 +230,13 @@ def test_one_trigger_produces_one_rollback_proposal_scoring_2_and_auto_approved(
 def test_the_incident_span_is_the_root_and_carries_the_predicate(
     spans: InMemorySpanExporter,
 ) -> None:
-    result = run([a_classification(), a_diagnosis(), a_proposal()])
+    result = run(a_clean_run())
     finished = spans.get_finished_spans()
     root = next(s for s in finished if s.name == telemetry.SPAN_INCIDENT)
 
     assert root.parent is None
     assert root.attributes is not None
-    assert root.attributes["provenance.incident.outcome"] == "AUTHORIZED"
+    assert root.attributes["provenance.incident.outcome"] == "RESOLVED"
     assert root.attributes["provenance.incident.routed_to"] == "sre-infra-agent"
     assert result.action is not None
     from provenance import action as action_module
@@ -201,12 +253,13 @@ def test_the_incident_span_is_the_root_and_carries_the_predicate(
 
 def test_each_reasoning_step_emits_one_chain_span(spans: InMemorySpanExporter) -> None:
     """Item 2 defined `reasoning.chain` and shipped it with no emitter. This is the first."""
-    run([a_classification(), a_diagnosis(), a_proposal()])
+    run(a_clean_run())
     chains = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_REASONING_CHAIN]
     assert [s.attributes["provenance.reasoning.step"] for s in chains if s.attributes] == [
         "classification",
         "diagnosis",
         "planning",
+        "verification",
     ]
     # Who reasoned, not who may act: the Orchestrator holds no registry record.
     assert chains[0].attributes is not None
@@ -229,10 +282,11 @@ def test_a_malformed_emission_is_returned_once_and_the_replan_is_authorized(
             a_diagnosis(),
             a_proposal(action_class="RESTART_EVERYTHING"),
             a_proposal(),
+            a_verification(),
         ]
     )
     assert result.malformed_attempts == 1
-    assert result.outcome == "AUTHORIZED"
+    assert result.outcome == "RESOLVED"
     assert result.decision is not None and result.decision.score is not None
     assert result.decision.score.score == 2
 
@@ -277,6 +331,7 @@ def test_the_replan_prompt_carries_the_rejection_reason(spans: InMemorySpanExpor
             a_diagnosis(),
             a_proposal(action_class="RESTART_EVERYTHING"),
             a_proposal(),
+            a_verification(),
         ],
         prompts=[],
     )
@@ -288,9 +343,10 @@ def test_the_replan_prompt_carries_the_rejection_reason(spans: InMemorySpanExpor
             model_orchestrator=model,
             model_domain=model,
             model_planner=model,
+            model_verification=model,
         )
     )
-    assert "RESTART_EVERYTHING" in model.prompts[-1]
+    assert "RESTART_EVERYTHING" in model.prompts[-2], "the re-plan prompt carried no reason"
 
 
 # --- routing ------------------------------------------------------------------------------
@@ -335,10 +391,180 @@ def test_a_planner_understating_the_tier_is_rejected_before_the_gateway(
 
 def test_a_degraded_planner_is_held_carrying_the_same_score(spans: InMemorySpanExporter) -> None:
     """§3.4's "held regardless of risk score", reached through the whole loop for once."""
-    result = run(
-        [a_classification(), a_diagnosis(), a_proposal()], store=a_store(standing="DEGRADED")
-    )
+    result = run(a_clean_run(), store=a_store(standing="DEGRADED"))
     assert result.outcome == "HELD"
     assert result.decision is not None
     assert result.decision.reason == "STANDING_DEGRADED"
     assert result.decision.score is not None and result.decision.score.score == 2
+    # Item 10: a held action executes nothing, so there is nothing to verify and nothing to
+    # learn. §2.1 stage 7 parks it on a human; item 30 owns resuming it.
+    assert (result.execution, result.verification, result.belief) == (None, None, None)
+    names = {s.name for s in spans.get_finished_spans()}
+    assert telemetry.SPAN_VERIFICATION_OUTCOME not in names
+    assert telemetry.SPAN_BELIEF_COMMIT not in names
+
+
+# --- item 10: execute, verify, learn -------------------------------------------------------
+
+
+def test_a_confirmed_verification_writes_one_belief_and_resolves(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 10's `verify:` line, end to end: executed, dropped, CONFIRMED, committed."""
+    store = a_store()
+    result = run(a_clean_run(), store=store)
+
+    assert result.outcome == "RESOLVED"
+    assert result.execution is not None
+    assert (result.execution.from_version, result.execution.to_version) == ("v42", "v41")
+    assert result.verification == "CONFIRMED"
+    assert result.belief is not None
+    assert (result.belief.outcome, result.belief.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert result.belief.confidence == pytest.approx(0.60)
+
+    # The rollback reached the store, and the belief did too. One belief, not two.
+    service = store.collections["services"]["inventory-api"]
+    assert service["current_config_version"] == "v41"
+    assert service["error_rate"] == company.service("inventory-api").error_rate
+    assert list(store.collections["beliefs"]) == ["belief-inventory-api-1"]
+    policy.verify_commit(result.belief, policy.public_key_pem())
+
+
+def test_the_verification_span_carries_the_predicate_declared_before_execution(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The pairing that makes "pre-declared" checkable rather than asserted (§3.1, item 9).
+
+    The incident span carried this hash before the executor ran; the verification span
+    carries it after. Byte-identical, because `predicate_id` hashes the predicate's text
+    rather than being assigned per incident -- switch it to a per-incident id and this test
+    is the one that says why not.
+    """
+    run(a_clean_run())
+    finished = spans.get_finished_spans()
+    root = next(s for s in finished if s.name == telemetry.SPAN_INCIDENT)
+    verified = next(s for s in finished if s.name == telemetry.SPAN_VERIFICATION_OUTCOME)
+
+    assert root.attributes is not None and verified.attributes is not None
+    assert (
+        verified.attributes["provenance.verification.predicate_id"]
+        == root.attributes["provenance.incident.predicate_id"]
+    )
+    assert verified.attributes["provenance.verification.outcome"] == "CONFIRMED"
+    assert verified.attributes["provenance.verification.belief_written"] is True
+    assert verified.attributes["provenance.action.target"] == "inventory-api"
+    # The belief commit nests inside the verification span: `belief_written` is not known
+    # until the commit has been attempted.
+    belief = next(s for s in finished if s.name == telemetry.SPAN_BELIEF_COMMIT)
+    assert belief.parent is not None
+    assert verified.context is not None
+    assert belief.parent.span_id == verified.context.span_id
+
+
+def test_an_inconclusive_verification_writes_nothing_and_escalates(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§7.2's third row: "Nothing. No belief, no confidence, no partial credit."
+
+    This is the test a live run cannot honestly produce -- a model asked to be unsure on cue
+    is a model told what to answer -- and it is the one guarding the rule that makes the whole
+    memory system trustworthy. Commit on INCONCLUSIVE and this goes red.
+    """
+    store = a_store()
+    result = run(
+        [a_classification(), a_diagnosis(), a_proposal(), a_verification("INCONCLUSIVE")],
+        store=store,
+    )
+
+    assert result.outcome == "ESCALATED"
+    assert result.verification == "INCONCLUSIVE"
+    assert result.belief is None
+    assert store.collections["beliefs"] == {}
+    # It still executed, and the trace still says so honestly.
+    assert result.execution is not None
+    verified = next(
+        s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_VERIFICATION_OUTCOME
+    )
+    assert verified.attributes is not None
+    assert verified.attributes["provenance.verification.belief_written"] is False
+    # Ambiguity is an honest result, so the span is not an error (§8.1).
+    assert verified.status.status_code is not StatusCode.ERROR
+
+
+def test_a_refuted_verification_writes_nothing_yet_either(spans: InMemorySpanExporter) -> None:
+    """Item 19 owns the negative belief. Until then REFUTED escalates and learns nothing.
+
+    Stated as a test rather than left implicit so that item 19 *changes* a red assertion
+    instead of quietly filling a gap nobody had written down.
+    """
+    store = a_store()
+    result = run(
+        [a_classification(), a_diagnosis(), a_proposal(), a_verification("REFUTED")], store=store
+    )
+
+    assert result.outcome == "ESCALATED"
+    assert result.verification == "REFUTED"
+    assert result.belief is None and store.collections["beliefs"] == {}
+
+
+def test_a_verification_agent_that_cannot_answer_is_inconclusive(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§7.3: "verification agent errors/timeouts -> treated as INCONCLUSIVE".
+
+    The model's queue runs dry on the fourth call, so the agent node fails outright. An
+    executed action that reached the end of the loop with no verification span would read as
+    an incident nobody checked -- so the control loop emits it, exactly as it owns the
+    malformed count (§7.1).
+    """
+    store = a_store()
+    result = run([a_classification(), a_diagnosis(), a_proposal()], store=store)
+
+    assert result.execution is not None, "the rollback should still have executed"
+    assert result.verification == "INCONCLUSIVE"
+    assert result.outcome == "ESCALATED"
+    assert store.collections["beliefs"] == {}
+    assert [
+        s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_VERIFICATION_OUTCOME
+    ], "an executed incident emitted no verification span"
+
+
+def test_an_execution_failure_escalates_and_verifies_nothing(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§7.3's new row: nothing verified, nothing written, and the outcome recorded not raised."""
+    store = a_store()
+    del store.collections["fault_injection"]["inventory-api"]
+    result = run(a_clean_run(), store=store)
+
+    assert result.outcome == "ESCALATED"
+    assert result.execution is None and result.verification is None and result.belief is None
+    names = {s.name for s in spans.get_finished_spans()}
+    assert telemetry.SPAN_VERIFICATION_OUTCOME not in names
+    assert telemetry.SPAN_BELIEF_COMMIT not in names
+    root = next(s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_INCIDENT)
+    assert root.attributes is not None
+    assert root.attributes["provenance.incident.outcome"] == "ESCALATED"
+
+
+def test_a_planner_that_lost_its_memory_domain_still_executes_but_learns_nothing(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The action path and the memory path are two authorities, and they can disagree.
+
+    The SRE agent holds no `infrastructure` domain here, so §2.2 stage 2 refuses the write --
+    but the rollback was authorized on the *action* path and stays executed. The incident
+    still resolves; what it does not do is quietly learn from a write it was refused.
+    """
+    store = a_store(sre={"memory_domains": ["supply-chain"]})
+    result = run(a_clean_run(), store=store)
+
+    assert result.verification == "CONFIRMED"
+    assert result.belief is not None
+    assert (result.belief.outcome, result.belief.reason) == ("REJECT", "DOMAIN_NOT_HELD")
+    assert store.collections["beliefs"] == {}
+    verified = next(
+        s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_VERIFICATION_OUTCOME
+    )
+    assert verified.attributes is not None
+    assert verified.attributes["provenance.verification.belief_written"] is False

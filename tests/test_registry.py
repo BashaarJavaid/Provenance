@@ -23,7 +23,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from google.api_core.exceptions import NotFound, ServiceUnavailable
+from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable
 
 from provenance import registry
 
@@ -54,36 +54,62 @@ class FakeSnapshot:
 
 
 class FakeDocument:
-    def __init__(self, store: FakeFirestore, doc_id: str) -> None:
+    def __init__(self, store: FakeFirestore, docs: dict[str, dict[str, Any]], doc_id: str) -> None:
         self._store = store
+        self._docs = docs
         self._id = doc_id
 
     async def get(self) -> FakeSnapshot:
         if self._store.error is not None:
             raise self._store.error
-        return FakeSnapshot(self._store.docs.get(self._id))
+        return FakeSnapshot(self._docs.get(self._id))
 
     async def update(self, fields: dict[str, Any]) -> None:
         if self._store.error is not None:
             raise self._store.error
-        if self._id not in self._store.docs:
+        if self._id not in self._docs:
             raise NotFound(self._id)
-        self._store.docs[self._id].update(fields)
+        self._docs[self._id].update(fields)
+
+    async def create(self, payload: dict[str, Any]) -> None:
+        """Firestore's create-if-absent. Item 10's Policy Engine writes beliefs through it."""
+        if self._store.error is not None:
+            raise self._store.error
+        if self._id in self._docs:
+            raise AlreadyExists(self._id)
+        self._docs[self._id] = dict(payload)
 
 
 class FakeFirestore:
-    """A dict the test can mutate between reads. `docs` is keyed by document id."""
+    """A dict the test can mutate between reads. `docs` is keyed by document id.
 
-    def __init__(self, docs: dict[str, dict[str, Any]], error: Exception | None = None) -> None:
+    Item 5 needed one collection (`agents`) and `docs` is still it, so every registry test
+    reads unchanged. Item 10 added the executor and the Policy Engine, which read `services`
+    and `fault_injection` and write `beliefs`, so extra collections are passed by keyword and
+    live in `collections` alongside it.
+    """
+
+    def __init__(
+        self,
+        docs: dict[str, dict[str, Any]],
+        error: Exception | None = None,
+        **collections: dict[str, dict[str, Any]],
+    ) -> None:
         self.docs = docs
         self.error = error
+        self.collections: dict[str, dict[str, Any]] = {registry.COLLECTION: docs, **collections}
 
-    def collection(self, name: str) -> FakeFirestore:
-        assert name == registry.COLLECTION
-        return self
+    def collection(self, name: str) -> _FakeCollection:
+        return _FakeCollection(self, self.collections.setdefault(name, {}))
+
+
+class _FakeCollection:
+    def __init__(self, store: FakeFirestore, docs: dict[str, dict[str, Any]]) -> None:
+        self._store = store
+        self._docs = docs
 
     def document(self, doc_id: str) -> FakeDocument:
-        return FakeDocument(self, doc_id)
+        return FakeDocument(self._store, self._docs, doc_id)
 
 
 def a_stored_agent(**overrides: Any) -> dict[str, Any]:
