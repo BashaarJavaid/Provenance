@@ -16,6 +16,11 @@
 # Cost: --min-instances=0 means $0 while idle, the only posture CLAUDE.md's cost ceiling
 # permits by default. Cloud Build minutes and egress sit inside the free tier at this
 # volume. Nothing provisioned here bills overnight.
+#
+# --max-instances=1 (was 3, lowered in item 11): the trace UI's span buffer lives in the
+# process that ran the incident, so a long POST /trigger and the 1/s GET /trace polls have
+# to land on the same instance or the panel silently shows nothing. Scale-to-zero is
+# unaffected, so this lowers the ceiling rather than raising it.
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-provenance-hackathon}"
@@ -72,7 +77,7 @@ gcloud run deploy "${SERVICE}" \
   --region="${REGION}" \
   --allow-unauthenticated \
   --min-instances=0 \
-  --max-instances=3 \
+  --max-instances=1 \
   --memory=512Mi \
   --cpu=1 \
   --env-vars-file="${ENV_FILE}" \

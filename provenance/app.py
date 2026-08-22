@@ -13,8 +13,15 @@ app (`docs/adr/ADR-007`, ADR-008).
 
 The trigger is guarded by a shared secret rather than left open. The service is public and
 unauthenticated by design (item 36's cold judge), and every trigger spends model tokens
-against a fixed credit; an open endpoint is a loop somebody else gets to run. The registry
-panel §8.2 describes is still item 11's, and no route here reads Firestore directly.
+against a fixed credit; an open endpoint is a loop somebody else gets to run.
+
+`GET /trace` arrived with item 11 and is deliberately **not** guarded. It is the read side
+of the one stream (§8): a cold browser has to be able to watch an incident without a token,
+which is item 11's whole `verify:` line, and a read spends nothing -- which is the entire
+reason `/trigger` is guarded and this is not. What makes it safe to serve is §8.1's
+redaction rule: span attributes carry identifiers, hashes, enums and numbers, never content,
+and `tests/test_telemetry_schema.py` walks every shape enforcing it. `THREAT_MODEL.md`
+records what that publishes. No route here reads Firestore directly.
 """
 
 from __future__ import annotations
@@ -66,6 +73,12 @@ async def health() -> dict[str, Any]:
 @app.get("/")
 async def shell() -> FileResponse:
     return FileResponse(_SHELL, media_type="text/html")
+
+
+@app.get("/trace")
+async def spans() -> list[dict[str, Any]]:
+    """The one stream, live (item 11). Unauthenticated on purpose -- see the module docstring."""
+    return telemetry.BUFFER.snapshot()
 
 
 class TriggerRequest(BaseModel):

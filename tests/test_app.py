@@ -1,16 +1,21 @@
-"""The offline half of ROADMAP item 3: the app answers both routes with no credentials.
+"""The offline half of ROADMAP items 3 and 11: the app answers its routes with no credentials.
 
-The live half is `./scripts/deploy.sh`, which curls the deployed URL. This runs in CI,
-where `GOOGLE_CLOUD_PROJECT` is unset, so `configure_tracing()` no-ops and reports False.
+The live half is `./scripts/deploy.sh`, which curls the deployed URL, plus item 11's
+`/trace` assertions in `scripts/verify_incident_one.py`. This runs in CI, where
+`GOOGLE_CLOUD_PROJECT` is unset, so `configure_tracing()` wires no Cloud Trace export and
+reports False — while the in-process span buffer works anyway, which is what lets these
+tests exercise `/trace` at all.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from provenance import app as app_module
-from provenance import incident
+from provenance import incident, telemetry
 from provenance.app import app
 
 
@@ -42,6 +47,71 @@ def test_root_serves_the_shell_with_all_six_surfaces() -> None:
         "Counterfactual panel",
     ):
         assert surface in response.text
+
+
+# --- GET /trace (item 11) -----------------------------------------------------------------
+
+
+@pytest.fixture
+def buffer() -> Iterator[None]:
+    telemetry.BUFFER.clear()
+    yield
+    telemetry.BUFFER.clear()
+
+
+def test_trace_is_readable_without_a_token(buffer: None) -> None:
+    """Item 11's verify line is a *cold* browser: no header, no credentials, no console.
+
+    The guard on /trigger exists because a trigger spends model tokens. A read spends
+    nothing, and §8.1 keeps content out of the stream, so this one is open by design.
+    """
+    with TestClient(app) as client:
+        assert client.get("/trace").json() == []
+        with telemetry.incident(
+            incident_id="inc-cold", trigger_target="inventory-api", trigger_signal="error_rate"
+        ) as rec:
+            running = client.get("/trace")
+            rec.set_outcome(outcome="RESOLVED", malformed_attempts=0, predicate_id="abc123")
+        done = client.get("/trace")
+
+    assert running.status_code == 200
+    assert running.json()[0]["running"] is True
+    assert running.json()[0]["attrs"]["provenance.incident.id"] == "inc-cold"
+
+    assert done.status_code == 200
+    body = done.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "provenance.incident"
+    assert body[0]["running"] is False
+    assert body[0]["status"] == "OK"
+    assert body[0]["attrs"]["provenance.incident.outcome"] == "RESOLVED"
+    assert body[0]["trace_id"] and body[0]["span_id"]
+    assert body[0]["parent_id"] is None
+
+
+def test_trace_never_serves_content(buffer: None) -> None:
+    """§8.1's redaction rule, checked on the bytes that actually leave the process."""
+    forbidden = ("prompt", "rationale", "payload", "text", "content", "message", "body")
+    with TestClient(app) as client:
+        with telemetry.reasoning_chain(
+            agent_id="sre-infra-agent",
+            agent_version="v1",
+            model="gemini-2.5-pro",
+            step="diagnose",
+            recall_belief_ids=(),
+        ) as rec:
+            rec.set_result(
+                hypotheses_considered=3,
+                selected_hypothesis="config_regression",
+                input_tokens=10,
+                output_tokens=20,
+            )
+        body = client.get("/trace").json()
+
+    assert body
+    for span in body:
+        for key in span["attrs"]:
+            assert not any(part in key for part in forbidden), key
 
 
 # --- POST /trigger (item 9) ---------------------------------------------------------------

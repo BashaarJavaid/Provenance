@@ -13,6 +13,7 @@ from collections.abc import Iterator, Sequence
 
 import pytest
 from conftest import attach_exporter
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
@@ -531,7 +532,125 @@ def test_no_shape_carries_content(spans: InMemorySpanExporter) -> None:
 # --- setup ----------------------------------------------------------------------------
 
 
-def test_configure_tracing_is_a_noop_without_a_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CI has no credentials; emitting must stay safe rather than needing a guard."""
+def test_configure_tracing_wires_no_cloud_export_without_a_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CI has no credentials; emitting must stay safe rather than needing a guard.
+
+    The return value means "Cloud Trace export is wired" and nothing else — item 11 made the
+    provider and the in-process buffer unconditional so the trace UI works with no
+    credentials, which is why this is no longer a total no-op.
+    """
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     assert telemetry.configure_tracing() is False
+
+
+# --- the span buffer (item 11) ---------------------------------------------------------
+
+
+@pytest.fixture
+def buffer() -> Iterator[telemetry._SpanBuffer]:
+    telemetry.BUFFER.clear()
+    yield telemetry.BUFFER
+    telemetry.BUFFER.clear()
+
+
+def test_a_span_is_visible_while_it_is_still_running(buffer: telemetry._SpanBuffer) -> None:
+    """The whole reason capture is on_start: an agent mid-call has to be renderable."""
+    with telemetry.incident(
+        incident_id="inc-live", trigger_target="inventory-api", trigger_signal="error_rate"
+    ) as rec:
+        held = buffer.snapshot()
+        assert [s["name"] for s in held] == ["provenance.incident"]
+        assert held[0]["running"] is True
+        assert held[0]["end_ns"] is None
+        # Attributes set before the span closes are readable now, not only at the end.
+        assert held[0]["attrs"] == {
+            "provenance.incident.id": "inc-live",
+            "provenance.incident.trigger_target": "inventory-api",
+            "provenance.incident.trigger_signal": "error_rate",
+        }
+        rec.set_outcome(outcome="RESOLVED", malformed_attempts=0, predicate_id="abc123")
+
+    done = buffer.snapshot()
+    assert len(done) == 1
+    assert done[0]["running"] is False
+    assert done[0]["end_ns"] is not None
+    assert done[0]["status"] == "OK"
+    assert done[0]["attrs"]["provenance.incident.outcome"] == "RESOLVED"  # type: ignore[index]
+
+
+def test_nested_spans_serialize_their_trace_and_parent(buffer: telemetry._SpanBuffer) -> None:
+    """The UI groups an incident by trace_id and nests by parent_id; both come from here."""
+    with telemetry.incident(
+        incident_id="inc-nest", trigger_target="inventory-api", trigger_signal="error_rate"
+    ) as rec:
+        with telemetry.reasoning_chain(
+            agent_id="sre-infra-agent",
+            agent_version="v1",
+            model="gemini-2.5-pro",
+            step="diagnose",
+            recall_belief_ids=(),
+        ) as inner:
+            inner.set_result(
+                hypotheses_considered=3,
+                selected_hypothesis="config_regression",
+                input_tokens=1,
+                output_tokens=1,
+            )
+        rec.set_outcome(outcome="RESOLVED", malformed_attempts=0)
+
+    root, child = buffer.snapshot()
+    assert root["name"] == "provenance.incident"
+    assert child["name"] == "provenance.reasoning.chain"
+    assert root["trace_id"] == child["trace_id"]
+    assert root["parent_id"] is None
+    assert child["parent_id"] == root["span_id"]
+
+
+def test_the_buffer_is_bounded(buffer: telemetry._SpanBuffer) -> None:
+    """It holds live span objects; unbounded growth would be a leak on a long-lived instance."""
+    for index in range(telemetry.BUFFER_SIZE + 10):
+        with telemetry.incident(
+            incident_id=f"inc-{index}", trigger_target="inventory-api", trigger_signal="error_rate"
+        ) as rec:
+            rec.set_outcome(outcome="RESOLVED", malformed_attempts=0)
+    held = buffer.snapshot()
+    assert len(held) == telemetry.BUFFER_SIZE
+    assert held[0]["attrs"]["provenance.incident.id"] == "inc-10"  # type: ignore[index]
+
+
+def test_what_the_buffer_serves_carries_no_content(buffer: telemetry._SpanBuffer) -> None:
+    """The redaction rule checked on what actually leaves the process, not only at emit."""
+    for emit in ALL_EMITTERS:
+        emit()
+    for span in buffer.snapshot():
+        attrs = span["attrs"]
+        assert isinstance(attrs, dict)
+        for key, value in attrs.items():
+            assert not any(part in key for part in _FORBIDDEN_KEY_PARTS), key
+            if isinstance(value, Sequence) and not isinstance(value, str):
+                assert all(isinstance(item, _ALLOWED_TYPES) for item in value), key
+            else:
+                assert isinstance(value, _ALLOWED_TYPES), key
+
+
+def test_the_buffer_holds_only_provenance_shapes(buffer: telemetry._SpanBuffer) -> None:
+    """ADK auto-instruments ~20 spans per incident onto the same provider (item 11).
+
+    They belong in Cloud Trace and reach it through the other processor; carrying them here
+    would quadruple what the UI polls and cut the buffer's history to a quarter, and the UI
+    filters them out by name anyway. §8.1's `provenance.` prefix exists to tell them apart.
+    """
+    tracer = trace.get_tracer("adk")
+    with (
+        tracer.start_as_current_span("agent orchestrator"),
+        telemetry.incident(
+            incident_id="inc-mixed", trigger_target="inventory-api", trigger_signal="error_rate"
+        ) as rec,
+    ):
+        with tracer.start_as_current_span("call_llm gemini-2.5-pro"):
+            pass
+        rec.set_outcome(outcome="RESOLVED", malformed_attempts=0)
+
+    assert [span["name"] for span in buffer.snapshot()] == ["provenance.incident"]

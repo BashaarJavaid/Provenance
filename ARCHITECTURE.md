@@ -451,6 +451,15 @@ The one deviation from "one stream, both destinations": Cloud **Trace** export i
 - **The counterfactual panel** — the measured A/B (memory on vs `--memory-disabled`): wall-clock, tool calls, tokens, hypotheses evaluated before the correct one.
 - **The registry panel** — standing, live, so a DEGRADED transition is visible the instant it happens.
 
+**As built (ROADMAP item 11) — two of the six, and one route.** The live fleet view and the gateway ledger are filled; the other four keep the placeholders item 3 left, each naming the item that fills it. Both read `GET /trace`, an unauthenticated read-only route serving a bounded in-process buffer of live span objects — the *same* spans `BatchSpanProcessor` exports to Cloud Trace, held by a second processor on the same provider, so §8's "the UI reads that same stream" is literal rather than approximate. Cloud Trace stays the durable record; this is the live one. Reasoning in [`docs/adr/ADR-015`](./docs/adr/ADR-015-the-trace-ui.md). **§8.1 did not change** — no new span shape, no new attribute key; every field both surfaces render was defined in item 2 or item 9.
+
+Four things follow from that, and are worth knowing before a later item adds a surface:
+
+- **Spans are captured at start, not at end.** "Current state" is only true if an in-flight agent is visible, and a `reasoning.chain` span stays open for the whole model call (~20s per Pro call). An SDK span's attributes are readable while it is still recording and its `end_time` is `None` until it closes, so one buffer entry serves both states and the endpoint reports `running` per span.
+- **The Executor has no row, deliberately.** It emits no span (§5.8a, ADR-014); what came of it reaches the trace through the `verification.outcome` span that judges it, and that is the row the fleet view shows. A surface that inferred an executor row would be asserting state the audit stream cannot prove — the one thing §8 says these views must not do.
+- **The ledger renders holds and denials, not just approvals**, which is what §2.1 stage 6 promised a surface for. A decision denied before the risk table carries no score and the panel says so rather than rendering a zero; a scored one renders `score = base + criticality + blast + irreversibility` component by component, which `set_risk()` already refuses to emit unless it sums.
+- **`configure_tracing()` now always builds the provider**, and its return value means exactly "Cloud Trace export is wired" — which is what `/health`'s `tracing` field always reported. The buffer is unconditional so the UI works with no credentials, locally and in CI, which is what lets this item have an offline half at all.
+
 ## 9. Data model — the synthetic company
 
 No real company data. A small, internally consistent fictional company built on Google's own ADK reference data: the `google/adk-samples` Customer Service sample — a fictional big-box home-improvement/gardening retailer with an existing customer/order/inventory model.
