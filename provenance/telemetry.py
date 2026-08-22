@@ -464,7 +464,7 @@ def belief_commit(
     evidence_ids: Sequence[str],
     source_classes: Sequence[SourceClass],
     novel_count: int,
-    supersedes: str | None = None,
+    supersedes: int | None = None,
 ) -> Iterator[BeliefRecorder]:
     """The §2.2 memory write pipeline. COMMIT, REJECT and RETRACT share this shape."""
     with _shape(

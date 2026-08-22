@@ -34,9 +34,10 @@ inside a `try/finally` that restores every field on any exit path, including Ctr
 lesson, for the same reason: a crash between the injection and the restore leaves the demo's
 service permanently spiked or permanently rolled back, and `seed_firestore.py` skips existing
 documents so a re-seed will not put it back. It restores exactly what it changed, and it
-deletes the belief it wrote -- `policy.py` itself never deletes anything (§6: append-only).
+deletes the belief chain it wrote -- `provenance/` itself never deletes anything (§6:
+append-only).
 
-It refuses to run if the fault switch is already on, or if `beliefs/belief-inventory-api-1`
+It refuses to run if the fault switch is already on, or if `beliefs/belief-inventory-api`
 already exists, because in either case the restore would cement someone else's state.
 
 Set `PROVENANCE_SERVICE_URL` and `PROVENANCE_TRIGGER_TOKEN` to also run incident #1 a second
@@ -70,7 +71,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import firestore, trace_v1
 from opentelemetry import trace
 
-from provenance import action, gateway, incident, policy, telemetry
+from provenance import action, beliefs, gateway, incident, policy, telemetry
 from provenance.synthetic import company
 
 TARGET = "inventory-api"
@@ -86,7 +87,7 @@ EXPECTED_COMPONENTS = (1, 1, 0, 0)
 
 # §4.3's arithmetic over the one thing incident #1 can honestly claim to know:
 # `1 - (1 - 0.60) = 0.60` from a single fresh `verified_system_observation`.
-BELIEF_ID = f"belief-{TARGET}-1"
+BELIEF_ID = f"belief-{TARGET}"
 EXPECTED_CONFIDENCE = 0.60
 
 # Item 11.5's second `verify:` clause: "no run's success_predicate names a threshold at or
@@ -132,6 +133,9 @@ def restore(client: firestore.Client) -> None:
     The delete lives here rather than in `policy.py`: §6 makes beliefs append-only and the
     engine has no delete path at all. Tearing down a *test fixture* is a different act from
     retracting a belief (§6.4), and only one of them belongs in the product.
+
+    Item 12 widened the belief half from one document to a chain: the version subcollection,
+    the `evidence/{id}` documents those versions cite, and the root document.
     """
     service = company.service(TARGET)
     client.collection("services").document(TARGET).update(
@@ -142,7 +146,21 @@ def restore(client: firestore.Client) -> None:
         }
     )
     client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
-    client.collection(policy.COLLECTION).document(BELIEF_ID).delete()
+    delete_belief(client)
+
+
+def delete_belief(client: firestore.Client) -> None:
+    """Remove the whole chain this run's incident can have written, evidence included.
+
+    The evidence ids are read off the version documents rather than reconstructed: each is
+    `ev-{predicate_id}`, and the predicate is whatever the Planner wrote this run.
+    """
+    versions = client.collection(f"{beliefs.COLLECTION}/{BELIEF_ID}/versions")
+    for snapshot in versions.stream():
+        for evidence_id in (snapshot.to_dict() or {}).get("evidence", []):
+            client.collection(beliefs.EVIDENCE_COLLECTION).document(evidence_id).delete()
+        snapshot.reference.delete()
+    client.collection(beliefs.COLLECTION).document(BELIEF_ID).delete()
 
 
 def refuse_if_dirty(client: firestore.Client) -> bool:
@@ -161,13 +179,13 @@ def refuse_if_dirty(client: firestore.Client) -> bool:
             file=sys.stderr,
         )
         return True
-    if client.collection(policy.COLLECTION).document(BELIEF_ID).get().exists:
-        # A pre-existing v1 would make the Policy Engine answer SUPERSESSION_UNSUPPORTED --
-        # correct behaviour, and it would still fail this run -- and the restore would then
-        # delete somebody else's belief on the way out.
+    if client.collection(beliefs.COLLECTION).document(BELIEF_ID).get().exists:
+        # Since item 12 a pre-existing v1 no longer refuses the run -- it would be superseded,
+        # which is correct behaviour and would still make this script's v1 assertion fail. The
+        # reason to refuse is unchanged: the restore would delete somebody else's chain.
         print(
-            f"FAIL: {policy.COLLECTION}/{BELIEF_ID} already exists. This run would be refused\n"
-            "      as an unsupported supersession, and its restore would delete that document.\n"
+            f"FAIL: {beliefs.COLLECTION}/{BELIEF_ID} already exists. This run would supersede\n"
+            "      it, and its restore would then delete that whole chain.\n"
             "      Remove it deliberately, then re-run.",
             file=sys.stderr,
         )

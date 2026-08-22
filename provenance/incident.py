@@ -58,6 +58,7 @@ from google.genai import types
 
 from provenance import (
     action,
+    beliefs,
     credentials,
     executor,
     gateway,
@@ -446,14 +447,14 @@ async def _commit_belief(
     """
     assert scratch.validated is not None and scratch.post_state is not None
     validated = scratch.validated
-    observed_at = now.astimezone(UTC).strftime(policy.TIMESTAMP)
-    evidence = policy.Evidence(
+    observed_at = now.astimezone(UTC).strftime(beliefs.TIMESTAMP)
+    evidence = beliefs.Evidence(
         id=f"ev-{action.predicate_id(validated)}",
         source_id=f"firestore:{executor.SERVICES}/{validated.target}",
         source_class="verified_system_observation",
         observed_at=observed_at,
         ingested_at=observed_at,
-        payload_hash=policy.payload_hash(asdict(scratch.post_state)),
+        payload_hash=beliefs.payload_hash(asdict(scratch.post_state)),
         verifiable_by=f"re-read {executor.SERVICES}/{validated.target}",
     )
     return await policy.commit(

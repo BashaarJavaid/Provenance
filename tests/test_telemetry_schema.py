@@ -81,7 +81,7 @@ def _emit_belief() -> None:
         evidence_ids=["ev-118", "ev-140"],
         source_classes=["verified_system_observation", "third_party_audit"],
         novel_count=2,
-        supersedes="belief-17",
+        supersedes=1,
     ) as rec:
         rec.set_outcome(outcome="COMMIT", reason="ABOVE_THRESHOLD", signature="ecdsa:y")
 
