@@ -316,14 +316,14 @@ def test_the_registry_is_read_on_every_authorization() -> None:
     # get_agent() would make the second one free -- and the standing-flip test above blind.
     store = a_store()
     reads = 0
-    original = store.document
+    original = store.collection
 
-    def counting(doc_id: str) -> Any:
+    def counting(name: str) -> Any:
         nonlocal reads
         reads += 1
-        return original(doc_id)
+        return original(name)
 
-    store.document = counting  # type: ignore[method-assign]
+    store.collection = counting  # type: ignore[method-assign]
     authorize(a_rollback(), store=store)
     authorize(a_rollback(), store=store)
     assert reads == 2

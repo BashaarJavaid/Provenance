@@ -300,6 +300,39 @@ def test_an_unroutable_incident_carries_no_routing_and_no_predicate(
     assert "provenance.incident.predicate_id" not in keys
 
 
+def test_a_resolved_incident_is_not_an_error(spans: InMemorySpanExporter) -> None:
+    """Item 10 added `RESOLVED`: executed, verified CONFIRMED, belief attempted.
+
+    Added under item 2's own condition -- module, `ARCHITECTURE.md` §8.1 and this file in one
+    commit -- the same way item 9 paid for the fifth shape.
+    """
+    with telemetry.incident(
+        incident_id="inc-resolved",
+        trigger_target="inventory-api",
+        trigger_signal="error_rate",
+    ) as rec:
+        rec.set_outcome(outcome="RESOLVED", malformed_attempts=0, predicate_id="9f2c1ab304de5567")
+    span = _only(spans)
+    assert span.status.status_code is StatusCode.OK
+    assert span.attributes is not None
+    assert span.attributes["provenance.incident.outcome"] == "RESOLVED"
+
+
+def test_an_out_of_vocabulary_incident_outcome_still_raises(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Widening the vocabulary widened what may be *present*, not what may be invented."""
+    with (
+        pytest.raises(ValueError, match="RESOLVED_ISH"),
+        telemetry.incident(
+            incident_id="inc-bogus",
+            trigger_target="inventory-api",
+            trigger_signal="error_rate",
+        ) as rec,
+    ):
+        rec.set_outcome(outcome="RESOLVED_ISH", malformed_attempts=0)  # type: ignore[arg-type]
+
+
 def test_a_held_incident_is_not_an_error_but_an_escalated_one_is(
     spans: InMemorySpanExporter,
 ) -> None:

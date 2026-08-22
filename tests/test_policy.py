@@ -1,0 +1,237 @@
+"""ROADMAP item 10's stub Policy Engine: the computed number, and the four ways to be refused.
+
+`ARCHITECTURE.md` §10's confidence rows belong to item 13 and the conflict rule to item 14.
+What is checked here is only what the stub claims: §4.3's arithmetic over one source class,
+the §2.2 stage-2 standing and domain checks, the threshold, and the refusal to write a second
+version of a belief it cannot link to the first.
+
+The two confidence tests are the ones that would matter if every other guarantee held. If
+restating one observation twice moved the number, an agent could talk any belief over the
+threshold by repeating itself — which is the poisoning attack §6.3 exists to stop, and §4.3
+stops it with a `max` rather than with a model's opinion.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import pytest
+from conftest import attach_exporter
+from google.api_core.exceptions import ServiceUnavailable
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from test_registry import FakeFirestore
+
+from provenance import policy, registry, telemetry
+
+_EXPORTER = attach_exporter()
+
+NOW = datetime(2026, 8, 22, 12, 0, 0, tzinfo=UTC)
+ENTITY = "inventory-api"
+DOMAIN = "infrastructure"
+STATUS = "CONFIG_REGRESSION_PRONE"
+BELIEF_ID = f"belief-{ENTITY}-1"
+
+
+@pytest.fixture
+def spans() -> Any:
+    _EXPORTER.clear()
+    yield _EXPORTER
+    _EXPORTER.clear()
+
+
+def an_evidence(**overrides: Any) -> policy.Evidence:
+    return replace(
+        policy.Evidence(
+            id="ev-1",
+            source_id=f"firestore:services/{ENTITY}",
+            source_class="verified_system_observation",
+            observed_at=NOW.strftime(policy.TIMESTAMP),
+            ingested_at=NOW.strftime(policy.TIMESTAMP),
+            payload_hash="a" * 64,
+            verifiable_by=f"re-read services/{ENTITY}",
+        ),
+        **overrides,
+    )
+
+
+def a_store(**overrides: Any) -> FakeFirestore:
+    record = registry.Agent(
+        id="sre-infra-agent",
+        version="v1",
+        public_key="",
+        tool_scope=(),
+        memory_domains=("infrastructure",),
+        standing="GOOD",
+        rejection_window=(),
+    )
+    return FakeFirestore(
+        {"sre-infra-agent": registry.to_document(replace(record, **overrides))}, beliefs={}
+    )
+
+
+def commit(store: FakeFirestore, evidence: list[policy.Evidence] | None = None) -> Any:
+    return asyncio.run(
+        policy.commit(
+            entity=ENTITY,
+            domain=DOMAIN,
+            status=STATUS,
+            evidence=evidence if evidence is not None else [an_evidence()],
+            agent_id="sre-infra-agent",
+            now=NOW,
+            client=store,
+        )
+    )
+
+
+# --- §4.3, the computed number --------------------------------------------------------------
+
+
+def test_one_fresh_verified_observation_gives_exactly_the_published_weight() -> None:
+    """`1 - (1 - 0.60) = 0.60`. The number in §4.3's table, with no decay applied yet."""
+    assert policy.confidence([an_evidence()], now=NOW) == pytest.approx(0.60)
+
+
+def test_restating_one_observation_twice_is_worth_exactly_stating_it_once() -> None:
+    """§4.3: "only distinct source classes combine". This is the poisoning defense as arithmetic.
+
+    Two items, same class, same everything but the id — a restatement. If the noisy-OR ran
+    over items rather than classes this would be 0.84 and the belief would look corroborated
+    by a single reading of a single dial.
+    """
+    restated = [an_evidence(), an_evidence(id="ev-2")]
+    assert policy.confidence(restated, now=NOW) == pytest.approx(0.60)
+
+
+def test_a_bare_assertion_cannot_move_confidence_at_all() -> None:
+    """`unverified_external_claim` weighs 0.00, so it is not weak evidence — it is none."""
+    claim = an_evidence(id="ev-x", source_class="unverified_external_claim")
+    assert policy.confidence([claim], now=NOW) == pytest.approx(0.0)
+    # And it cannot dilute a real one either.
+    assert policy.confidence([an_evidence(), claim], now=NOW) == pytest.approx(0.60)
+
+
+def test_an_aged_observation_weighs_less_than_a_fresh_one() -> None:
+    """§6.5: "beliefs weaken on their own". One half-life halves the weight."""
+    old = an_evidence(observed_at=(NOW - timedelta(days=30)).strftime(policy.TIMESTAMP))
+    assert policy.confidence([old], now=NOW) == pytest.approx(0.30)
+
+
+# --- §2.2, the pipeline ----------------------------------------------------------------------
+
+
+def test_a_confirmed_observation_commits_the_first_belief(spans: InMemorySpanExporter) -> None:
+    store = a_store()
+    result = commit(store)
+
+    assert (result.outcome, result.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert result.confidence == pytest.approx(0.60)
+    assert result.belief_id == BELIEF_ID and result.version == 1
+
+    stored = store.collections["beliefs"][BELIEF_ID]
+    assert stored["scope"] == "ENTITY"
+    assert stored["status"] == STATUS
+    assert stored["authority"] == "sre-infra-agent@v1 (standing: GOOD)"
+    assert stored["confidence"] == pytest.approx(0.60)
+    assert len(stored["evidence"]) == 1
+    policy.verify_commit(result, policy.public_key_pem())
+
+
+def test_a_degraded_agents_memory_write_is_rejected_outright(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§3.4, verbatim. The gateway *holds* a DEGRADED agent's action; memory rejects it."""
+    store = a_store(standing="DEGRADED")
+    result = commit(store)
+
+    assert (result.outcome, result.reason) == ("REJECT", "STANDING_NOT_GOOD")
+    assert store.collections["beliefs"] == {}
+
+
+def test_an_agent_writing_outside_its_domains_is_rejected(spans: InMemorySpanExporter) -> None:
+    """Memory-domain authority is per agent (§3.4). The supply-chain agent holds no `sre`."""
+    store = a_store(memory_domains=("supply-chain",))
+    result = commit(store)
+
+    assert (result.outcome, result.reason) == ("REJECT", "DOMAIN_NOT_HELD")
+    assert store.collections["beliefs"] == {}
+
+
+def test_an_unreadable_registry_rejects_rather_than_committing(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§7.3 fail-closed. An authority check that did not happen is not one that passed."""
+    store = a_store()
+    store.error = ServiceUnavailable("firestore is down")
+    result = commit(store)
+
+    assert (result.outcome, result.reason) == ("REJECT", "REGISTRY_UNAVAILABLE")
+
+
+def test_evidence_below_the_threshold_does_not_write(spans: InMemorySpanExporter) -> None:
+    """0.15 from a single `agent_inference` is under §4.3's 0.50 for a new belief.
+
+    An agent's own reasoning about a system is worth something, and it is worth less than
+    half a commit. Nothing about that number is negotiable by the agent that produced it.
+    """
+    store = a_store()
+    result = commit(store, [an_evidence(source_class="agent_inference")])
+
+    assert (result.outcome, result.reason) == ("REJECT", "BELOW_THRESHOLD")
+    assert result.confidence == pytest.approx(0.15)
+    assert store.collections["beliefs"] == {}
+
+
+def test_an_existing_v1_is_rejected_rather_than_overwritten(spans: InMemorySpanExporter) -> None:
+    """Beliefs are append-only (§6). The stub cannot write a supersession link, so it refuses.
+
+    Overwriting would destroy history the whole memory design rests on; writing an unlinked
+    v2 would leave a belief nothing can trace to its predecessor. Refusing is the only third
+    option, and item 14 is what removes the need for it.
+    """
+    store = a_store()
+    first = commit(store)
+    stored = dict(store.collections["beliefs"][BELIEF_ID])
+
+    second = commit(store)
+
+    assert first.outcome == "COMMIT"
+    assert (second.outcome, second.reason) == ("REJECT", "SUPERSESSION_UNSUPPORTED")
+    assert store.collections["beliefs"][BELIEF_ID] == stored, "v1 was modified"
+
+
+# --- the span --------------------------------------------------------------------------------
+
+
+def test_the_commit_span_carries_the_arithmetic_and_omits_supersedes(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§8.1: a first belief supersedes nothing, and absent means omitted, never empty."""
+    commit(a_store())
+    span = next(s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT)
+    assert span.attributes is not None
+    assert span.attributes["provenance.decision.outcome"] == "COMMIT"
+    assert span.attributes["provenance.belief.confidence"] == pytest.approx(0.60)
+    assert span.attributes["provenance.belief.threshold"] == pytest.approx(0.50)
+    assert span.attributes["provenance.evidence.source_classes"] == ("verified_system_observation",)
+    assert span.attributes["provenance.decision.signature"].startswith("ecdsa:")
+    assert "provenance.belief.supersedes" not in span.attributes
+
+
+def test_a_rejection_is_on_the_span_too(spans: InMemorySpanExporter) -> None:
+    """§2.2 stage 6: "every outcome is signed and audited" — refusals are the ones that matter."""
+    commit(a_store(standing="DEGRADED"))
+    span = next(s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT)
+    assert span.attributes is not None
+    assert span.attributes["provenance.decision.reason"] == "STANDING_NOT_GOOD"
+    assert span.attributes["provenance.agent.standing"] == "DEGRADED"
+
+
+def test_a_tampered_commit_does_not_verify(spans: InMemorySpanExporter) -> None:
+    """The signature covers the outcome, so a REJECT cannot be re-read as a COMMIT."""
+    result = commit(a_store())
+    forged = replace(result, outcome="RETRACT")
+    with pytest.raises(policy.CommitInvalid):
+        policy.verify_commit(forged, policy.public_key_pem())

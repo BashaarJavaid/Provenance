@@ -65,7 +65,14 @@ SourceClass = Literal[
 ]
 VerificationOutcome = Literal["CONFIRMED", "REFUTED", "INCONCLUSIVE"]
 TriggerSignal = Literal["error_rate"]
-IncidentOutcome = Literal["AUTHORIZED", "HELD", "DENIED", "ESCALATED", "UNROUTABLE"]
+IncidentOutcome = Literal[
+    "RESOLVED",  # item 10: executed, verified CONFIRMED, belief attempted. Not an error.
+    "AUTHORIZED",
+    "HELD",
+    "DENIED",
+    "ESCALATED",
+    "UNROUTABLE",
+]
 
 SPAN_INCIDENT = "provenance.incident"
 SPAN_AUTHORIZATION_DECISION = "provenance.authorization.decision"

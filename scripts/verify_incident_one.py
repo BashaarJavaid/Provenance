@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
-"""Check ROADMAP item 9's `verify:` line against real GCP and a real model.
+"""Check ROADMAP items 9 and 10's `verify:` lines against real GCP and real models.
 
     PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" \
     GOOGLE_CLOUD_PROJECT=provenance-hackathon \
     GOOGLE_GENAI_USE_VERTEXAI=1 GOOGLE_CLOUD_LOCATION=global \
     .venv/bin/python scripts/verify_incident_one.py
 
-The line: "the injected `inventory-api` error-rate spike produces exactly one typed
-`ROLLBACK_CONFIG` proposal, risk 2, auto-approved." Three real Gemini calls sit between the
-trigger and the score, so the point of this script is that the *deterministic* half holds
-whatever the models say: the tool registry and entity model overrule the Planner's declared
-fields, and the risk table -- not the reasoning -- produces the 2.
+Item 9's line: "the injected `inventory-api` error-rate spike produces exactly one typed
+`ROLLBACK_CONFIG` proposal, risk 2, auto-approved."
+Item 10's: "rollback executes on the synthetic service, error rate drops, verification returns
+CONFIRMED against the predicate declared before execution."
+
+Four real Gemini calls sit between the trigger and the belief, so the point of this script is
+that the *deterministic* half holds whatever the models say: the tool registry and entity model
+overrule the Planner's declared fields, the risk table -- not the reasoning -- produces the 2,
+and the 0.60 confidence comes from §4.3's published formula rather than from anything the
+Verification Agent asserted.
+
+This is one script rather than two because item 10 is incident #1 *finishing*. A second script
+would re-inject the same fault and spend a second set of model calls re-proving item 9's half.
 
 "Exactly one" is counted, not assumed: one `provenance.authorization.decision` span on the
 trace, and zero malformed re-plans. Two proposals would mean §7.1's budget was spent.
 
-**This script mutates stored state.** The fault injection runs inside a `try/finally` that
-clears it on any exit path, including Ctrl-C -- item 8's lesson, for the same reason: a crash
-between the injection and the restore leaves the demo's service permanently spiked, and
-`seed_firestore.py` skips existing documents so a re-seed will not put it back. It refuses to
-run if the switch is already on, because then the restore would cement someone else's state.
+**This script mutates stored state.** The fault injection *and the rollback it provokes* run
+inside a `try/finally` that restores every field on any exit path, including Ctrl-C -- item 8's
+lesson, for the same reason: a crash between the injection and the restore leaves the demo's
+service permanently spiked or permanently rolled back, and `seed_firestore.py` skips existing
+documents so a re-seed will not put it back. It restores exactly what it changed, and it
+deletes the belief it wrote -- `policy.py` itself never deletes anything (§6: append-only).
+
+It refuses to run if the fault switch is already on, or if `beliefs/belief-inventory-api-1`
+already exists, because in either case the restore would cement someone else's state.
 
 Set `PROVENANCE_SERVICE_URL` and `PROVENANCE_TRIGGER_TOKEN` to also check the deployed
 `POST /trigger` route -- 403 unauthenticated, 200 with the token. Skipped, loudly, without them.
@@ -44,7 +56,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import firestore, trace_v1
 from opentelemetry import trace
 
-from provenance import action, gateway, incident, telemetry
+from provenance import action, gateway, incident, policy, telemetry
 from provenance.synthetic import company
 
 TARGET = "inventory-api"
@@ -58,6 +70,11 @@ POLL_INTERVAL_S = 10.0
 EXPECTED_SCORE = 2
 EXPECTED_COMPONENTS = (1, 1, 0, 0)
 
+# §4.3's arithmetic over the one thing incident #1 can honestly claim to know:
+# `1 - (1 - 0.60) = 0.60` from a single fresh `verified_system_observation`.
+BELIEF_ID = f"belief-{TARGET}-1"
+EXPECTED_CONFIDENCE = 0.60
+
 
 def load_private_key(pem: str) -> ec.EllipticCurvePrivateKey:
     key = serialization.load_pem_private_key(pem.encode(), password=None)
@@ -66,13 +83,36 @@ def load_private_key(pem: str) -> ec.EllipticCurvePrivateKey:
     return key
 
 
-def set_fault(client: firestore.Client, *, spike: bool) -> None:
+def inject(client: firestore.Client) -> None:
     """The §9 switch and the observed rate, in the two documents `seed_firestore.py` wrote."""
-    nominal = company.service(TARGET).error_rate
     client.collection("services").document(TARGET).update(
-        {"error_rate": SPIKED_ERROR_RATE if spike else nominal}
+        {"error_rate": SPIKED_ERROR_RATE, "healthy": False}
     )
-    client.collection("fault_injection").document(TARGET).update({"error_rate_spike": spike})
+    client.collection("fault_injection").document(TARGET).update({"error_rate_spike": True})
+
+
+def restore(client: firestore.Client) -> None:
+    """Put back every field this run could have moved, from the in-code fixture, not from memory.
+
+    Item 10 widened this from item 9's one-field clear: the rollback the fleet performs writes
+    `current_config_version` and `healthy` too, and the Policy Engine writes a belief. What is
+    restored is exactly the demo baseline `seed_firestore.py --reset` would write, plus a
+    delete of the one belief document this script's incident can have created.
+
+    The delete lives here rather than in `policy.py`: §6 makes beliefs append-only and the
+    engine has no delete path at all. Tearing down a *test fixture* is a different act from
+    retracting a belief (§6.4), and only one of them belongs in the product.
+    """
+    service = company.service(TARGET)
+    client.collection("services").document(TARGET).update(
+        {
+            "error_rate": service.error_rate,
+            "healthy": service.healthy,
+            "current_config_version": service.current_config_version,
+        }
+    )
+    client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
+    client.collection(policy.COLLECTION).document(BELIEF_ID).delete()
 
 
 def check_result(result: incident.IncidentResult) -> int:
@@ -84,8 +124,8 @@ def check_result(result: incident.IncidentResult) -> int:
         print(f"FAIL: {message}", file=sys.stderr)
         failures += 1
 
-    if result.outcome != "AUTHORIZED":
-        fail(f"the incident ended {result.outcome}, not AUTHORIZED")
+    if result.outcome != "RESOLVED":
+        fail(f"the incident ended {result.outcome}, not RESOLVED")
     if result.malformed_attempts:
         fail(f"the Planner needed {result.malformed_attempts} re-plan(s); expected none")
 
@@ -119,6 +159,56 @@ def check_result(result: incident.IncidentResult) -> int:
         gateway.verify_decision(result.decision, gateway.public_key_pem())
     except gateway.DecisionInvalid as exc:
         fail(f"the decision's signature does not verify ({exc})")
+
+    # --- item 10: it executed, it dropped, it was confirmed, and it was learned from.
+    if result.execution is None:
+        fail("the approved rollback never executed")
+    elif (result.execution.from_version, result.execution.to_version) != ("v42", "v41"):
+        fail(
+            f"the rollback went {result.execution.from_version} -> "
+            f"{result.execution.to_version}, expected v42 -> v41"
+        )
+    if result.verification != "CONFIRMED":
+        fail(f"verification returned {result.verification}, expected CONFIRMED")
+
+    if result.belief is None:
+        fail("a CONFIRMED verification wrote no belief")
+        return failures
+    if (result.belief.outcome, result.belief.reason) != ("COMMIT", "ABOVE_THRESHOLD"):
+        fail(f"the belief is {result.belief.outcome}/{result.belief.reason}, expected COMMIT")
+    if abs(result.belief.confidence - EXPECTED_CONFIDENCE) > 1e-6:
+        # Not "roughly right": §4.3 is a published formula over one fresh observation, so the
+        # only honest expectation is the exact number it produces.
+        fail(f"confidence is {result.belief.confidence}, expected {EXPECTED_CONFIDENCE}")
+    try:
+        policy.verify_commit(result.belief, policy.public_key_pem())
+    except policy.CommitInvalid as exc:
+        fail(f"the belief commit's signature does not verify ({exc})")
+    return failures
+
+
+def check_post_state(client: firestore.Client) -> int:
+    """The `verify:` line's middle clause, read back out of Firestore before the restore runs.
+
+    `result.execution` says what the executor believed it did; this says what the store holds.
+    """
+    failures = 0
+    state = client.collection("services").document(TARGET).get().to_dict() or {}
+    nominal = company.service(TARGET).error_rate
+    if state.get("current_config_version") != "v41":
+        print(
+            f"FAIL: {TARGET} is on {state.get('current_config_version')}, expected v41",
+            file=sys.stderr,
+        )
+        failures += 1
+    if state.get("error_rate") != nominal:
+        print(
+            f"FAIL: {TARGET} error_rate is {state.get('error_rate')}, expected {nominal}",
+            file=sys.stderr,
+        )
+        failures += 1
+    if not failures:
+        print(f"    ok  post-state      v41, error_rate {nominal} (from {SPIKED_ERROR_RATE})")
     return failures
 
 
@@ -136,12 +226,24 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
             file=sys.stderr,
         )
         return 1, "", None
+    if sync_client.collection(policy.COLLECTION).document(BELIEF_ID).get().exists:
+        # Item 8's precedent: refuse against dirty state rather than cement it. A pre-existing
+        # v1 would make the Policy Engine answer SUPERSESSION_UNSUPPORTED -- which is correct
+        # behaviour and would still fail this run -- and the restore would then delete somebody
+        # else's belief on the way out.
+        print(
+            f"FAIL: {policy.COLLECTION}/{BELIEF_ID} already exists. This run would be refused\n"
+            "      as an unsupported supersession, and its restore would delete that document.\n"
+            "      Remove it deliberately, then re-run.",
+            file=sys.stderr,
+        )
+        return 1, "", None
 
     tracer = trace.get_tracer("provenance.verify_incident_one")
     with tracer.start_as_current_span("provenance.verify_incident_one") as root:
         trace_id = format(root.get_span_context().trace_id, "032x")
         print(f"--> injecting the fault: {TARGET} error_rate -> {SPIKED_ERROR_RATE}")
-        set_fault(sync_client, spike=True)
+        inject(sync_client)
         try:
             result = await incident.run_incident(
                 incident.Trigger(
@@ -153,10 +255,14 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
                 client=async_client,
                 planner_key=private_key,
             )
+            # Read the store *before* the restore puts v42 back: this is the only window in
+            # which the rolled-back state exists, and it is half the `verify:` line.
+            post_failures = check_post_state(sync_client)
         finally:
-            # Any exit path, including an exception or a Ctrl-C mid-incident (item 8).
-            print("--> clearing the fault")
-            set_fault(sync_client, spike=False)
+            # Any exit path, including an exception or a Ctrl-C mid-incident (item 8). Item 10
+            # widened it: the fleet now writes three service fields and a belief.
+            print("--> restoring: v42, nominal error rate, fault off, belief deleted")
+            restore(sync_client)
 
     print(f"    incident {result.incident_id} -> {result.outcome}")
     if result.action is not None:
@@ -170,7 +276,17 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
             f"    risk      {s.base} + {s.criticality} + {s.blast} + {s.irreversibility} "
             f"= {s.score} -> {result.decision.outcome}"
         )
-    return check_result(result), trace_id, result
+    if result.execution is not None:
+        print(
+            f"    executed  {result.execution.from_version} -> {result.execution.to_version}"
+            f"  verification {result.verification}"
+        )
+    if result.belief is not None:
+        print(
+            f"    belief    {result.belief.belief_id} v{result.belief.version} "
+            f"{result.belief.outcome} at confidence {result.belief.confidence:.2f}"
+        )
+    return check_result(result) + post_failures, trace_id, result
 
 
 def read_back(project_id: str, trace_id: str) -> list[Any]:
@@ -225,7 +341,7 @@ def check_spans(spans: list[Any], result: Any) -> int:
         fail(f"{len(incidents)} incident span(s) on the trace, expected exactly 1")
     else:
         labels = incidents[0]
-        if attribute(labels, telemetry.ATTR_INCIDENT_OUTCOME) != "AUTHORIZED":
+        if attribute(labels, telemetry.ATTR_INCIDENT_OUTCOME) != "RESOLVED":
             fail(f"the incident span says {attribute(labels, telemetry.ATTR_INCIDENT_OUTCOME)}")
         if attribute(labels, telemetry.ATTR_INCIDENT_ROUTED_TO) != "sre-infra-agent":
             fail("the incident span does not record routing to sre-infra-agent")
@@ -234,13 +350,13 @@ def check_spans(spans: list[Any], result: Any) -> int:
         expected = action.predicate_id(result.action) if result.action is not None else None
         if recorded != expected:
             fail(f"the incident span's predicate_id is {recorded}, expected {expected}")
-        print(f"    ok  incident span   AUTHORIZED  predicate={recorded}")
+        print(f"    ok  incident span   RESOLVED  predicate={recorded}")
 
     chains = by_name.get(telemetry.SPAN_REASONING_CHAIN, [])
     steps = sorted(
         step for c in chains if (step := attribute(c, telemetry.ATTR_REASONING_STEP)) is not None
     )
-    if steps != ["classification", "diagnosis", "planning"]:
+    if steps != ["classification", "diagnosis", "planning", "verification"]:
         fail(f"reasoning steps on the trace are {steps}")
     else:
         print(f"    ok  reasoning spans {', '.join(steps)}")
@@ -275,6 +391,72 @@ def check_spans(spans: list[Any], result: Any) -> int:
     else:
         print(
             f"    ok  decision span   APPROVE  risk {' + '.join(str(n) for n in numbers)} = {total}"
+        )
+
+    failures += check_learning_spans(by_name, incidents)
+    return failures
+
+
+def check_learning_spans(
+    by_name: dict[str, list[dict[str, str]]], incidents: list[dict[str, str]]
+) -> int:
+    """Item 10's two spans: what verification concluded, and what memory did about it.
+
+    The `predicate_id` comparison is the one that matters. The incident span carried that hash
+    before the executor ran and the verification span carries it after, so matching them is how
+    the *trace* -- not a docstring -- says the predicate was declared before execution.
+    """
+    failures = 0
+
+    def fail(message: str) -> None:
+        nonlocal failures
+        print(f"FAIL: {message}", file=sys.stderr)
+        failures += 1
+
+    verifications = by_name.get(telemetry.SPAN_VERIFICATION_OUTCOME, [])
+    if len(verifications) != 1:
+        fail(f"{len(verifications)} verification span(s) on the trace, expected exactly 1")
+    else:
+        labels = verifications[0]
+        outcome = attribute(labels, telemetry.ATTR_VERIFICATION_OUTCOME)
+        written = attribute(labels, telemetry.ATTR_VERIFICATION_BELIEF_WRITTEN)
+        predicate = attribute(labels, telemetry.ATTR_VERIFICATION_PREDICATE_ID)
+        declared = (
+            attribute(incidents[0], telemetry.ATTR_INCIDENT_PREDICATE_ID) if incidents else None
+        )
+        if outcome != "CONFIRMED":
+            fail(f"the verification span says {outcome}, expected CONFIRMED")
+        elif str(written).lower() != "true":
+            fail(f"a CONFIRMED verification recorded belief_written={written}")
+        elif predicate != declared:
+            fail(
+                f"the verification span's predicate_id is {predicate}, but the incident span "
+                f"declared {declared} before execution"
+            )
+        else:
+            print(f"    ok  verification    CONFIRMED  predicate={predicate}  belief written")
+
+    beliefs = by_name.get(telemetry.SPAN_BELIEF_COMMIT, [])
+    if len(beliefs) != 1:
+        fail(f"{len(beliefs)} belief.commit span(s) on the trace, expected exactly 1")
+        return failures
+
+    labels = beliefs[0]
+    outcome = attribute(labels, telemetry.ATTR_DECISION_OUTCOME)
+    confidence = attribute(labels, telemetry.ATTR_BELIEF_CONFIDENCE)
+    if outcome != "COMMIT":
+        fail(f"the belief span says {outcome}/{attribute(labels, telemetry.ATTR_DECISION_REASON)}")
+    elif confidence is None or abs(float(confidence) - EXPECTED_CONFIDENCE) > 1e-6:
+        fail(f"the belief span's confidence is {confidence}, expected {EXPECTED_CONFIDENCE}")
+    elif not attribute(labels, telemetry.ATTR_DECISION_SIGNATURE):
+        fail("the belief.commit span carries no signature")
+    elif attribute(labels, telemetry.ATTR_BELIEF_SUPERSEDES) is not None:
+        # A first belief supersedes nothing, and the stub cannot write the link a v2 needs.
+        fail("a first belief carries a supersedes attribute")
+    else:
+        print(
+            f"    ok  belief span     COMMIT  {attribute(labels, telemetry.ATTR_BELIEF_ID)} "
+            f"at confidence {confidence}"
         )
     return failures
 
@@ -359,7 +541,11 @@ def main() -> int:
     if failures:
         print(f"\n{failures} check(s) failed.\n{url}", file=sys.stderr)
         return 1
-    print("\n--> one spike, one typed ROLLBACK_CONFIG, risk 2, auto-approved — by the table alone")
+    print(
+        "\n--> one spike, one typed ROLLBACK_CONFIG, risk 2, auto-approved by the table alone;"
+        "\n    executed, CONFIRMED against the predicate declared before it ran, and one belief"
+        "\n    committed at 0.60 — by the published formula, not by anything a model asserted"
+    )
     print(f"    {url}")
     return 0
 

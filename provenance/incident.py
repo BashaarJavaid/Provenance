@@ -11,7 +11,11 @@ the validation node back to the Planner, not a `while` loop hidden in a prompt.
                                             `-> halt (UNROUTABLE)                 |-> planner (REPLAN)
                                                                                   `-> halt (ESCALATE)
 
-Three properties this file is responsible for, and no other file is:
+    authorize ?-> execute ?-> verification -> resolve      (item 10)
+              |           `-> halt (execution failed)
+              `-> halt (HELD | DENIED)
+
+Four properties this file is responsible for, and no other file is:
 
 1. **The malformed count.** §7.1: "no agent owns its own iteration count -- the control loop
    does, in code." `action.outcome_for()` shipped in item 6 with no caller for exactly this.
@@ -19,10 +23,16 @@ Three properties this file is responsible for, and no other file is:
    "arrives with the Orchestrator in item 9". Everything else nests under it.
 3. **Nothing reaches a state-mutating action except through the gateway** (§1.1 property 1).
    The authorize node calls `gateway.authorize()` and there is no second path; a diagnosis
-   that never becomes a validated Action simply ends the incident.
+   that never becomes a validated Action simply ends the incident. Since item 10 something
+   downstream actually mutates state, and `executor.execute()` re-checks the decision's
+   signature, outcome and subject rather than trusting that this node routed correctly.
+4. **§7.2's rule for learning.** A belief is committed on `CONFIRMED` and on nothing else.
+   `REFUTED` and `INCONCLUSIVE` both escalate and write nothing -- no partial credit.
 
-Item 9 stops at the signed decision. Nothing executes and nothing is verified -- that is item
-10, which appends nodes rather than reshaping these.
+Item 10 appended `execute`, the Verification Agent and `resolve`, and gave `authorize` a
+`ctx.route`; nothing else about the item-9 graph changed. `resolve` is the node that opens
+the `verification.outcome` span, because `belief_written` is not known until the commit has
+been attempted -- so the `belief.commit` span nests inside it.
 
 Agents and the graph are built per incident. Two runs must not share the per-invocation
 tracing state in `_reasoning.py`, and a test must be able to substitute a fake model without
@@ -33,9 +43,10 @@ from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, get_args
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -45,10 +56,20 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.workflow import START, Workflow
 from google.genai import types
 
-from provenance import action, credentials, gateway, models, registry, telemetry, tools
-from provenance.agents import _reasoning, orchestrator, planner, sre_infra
+from provenance import (
+    action,
+    credentials,
+    executor,
+    gateway,
+    models,
+    policy,
+    registry,
+    telemetry,
+    tools,
+)
+from provenance.agents import _reasoning, orchestrator, planner, sre_infra, verification
 from provenance.synthetic import company
-from provenance.telemetry import IncidentOutcome, TriggerSignal
+from provenance.telemetry import IncidentOutcome, TriggerSignal, VerificationOutcome
 
 # The one place a domain becomes routable: name -> (agent id, what the domain covers).
 # Item 21 adds one entry and one agent file and changes nothing else here, which is what
@@ -68,6 +89,16 @@ ORCHESTRATOR_ID = "orchestrator"
 ORCHESTRATOR_VERSION = "v1"
 
 PLANNER_KEY_ENV = "PROVENANCE_PLANNER_KEY"
+
+# The Verification Agent holds no registry record, for the Orchestrator's reason (§3.4): it
+# proposes no action and writes no belief.
+VERIFICATION_ID = "verification-agent"
+VERIFICATION_VERSION = "v1"
+
+# The domain-typed status a confirmed rollback teaches (§3.2: "domain-typed; UNKNOWN and
+# RETRACTED are universal"). A constant while the stub Policy Engine is the only writer --
+# item 14's Memory Analyst is what proposes a status, and this line is what it replaces.
+BELIEF_STATUS = "CONFIG_REGRESSION_PRONE"
 
 _APP = "provenance"
 
@@ -90,13 +121,21 @@ class Trigger:
 
 @dataclass(frozen=True)
 class IncidentResult:
-    """What one turn of the loop produced. `outcome` is the discriminator, not `decision`."""
+    """What one turn of the loop produced. `outcome` is the discriminator, not `decision`.
+
+    The last three are `None` whenever the path was not taken -- a held incident executes
+    nothing, an escalated one verifies nothing, and an INCONCLUSIVE verification writes no
+    belief. Absent means the stage did not happen, never that it happened emptily.
+    """
 
     incident_id: str
     outcome: IncidentOutcome
     decision: gateway.Decision | None
     action: action.Action | None
     malformed_attempts: int
+    execution: executor.ExecutionResult | None = None
+    verification: VerificationOutcome | None = None
+    belief: policy.BeliefCommit | None = None
 
 
 @dataclass
@@ -115,6 +154,10 @@ class _Scratch:
     proposal: dict[str, Any] | None = None
     malformed_attempts: int = 0
     reasons: list[str] = field(default_factory=list)
+    execution: executor.ExecutionResult | None = None
+    post_state: executor.ServiceState | None = None
+    verification: VerificationOutcome | None = None
+    belief: policy.BeliefCommit | None = None
 
 
 def load_planner_key() -> ec.EllipticCurvePrivateKey:
@@ -171,6 +214,12 @@ def _seed_state(
         _reasoning.RECALL_BELIEF_IDS: list(recalled),
         "malformed_feedback": "",
         "diagnosis_summary": "",
+        # Item 10. The Verification Agent's instruction interpolates all three, and the
+        # `execute` node overwrites them with what it measured; seeded here because an
+        # instruction naming a key that was never seeded fails at interpolation time.
+        "success_predicate": "",
+        "post_error_rate": trigger.observed_value,
+        "post_config_version": service.current_config_version or "unknown",
     }
 
 
@@ -184,8 +233,9 @@ def build_graph(
     model_orchestrator: str | object,
     model_domain: str | object,
     model_planner: str | object,
+    model_verification: str | object,
 ) -> Workflow:
-    """The §2.1 + §7.1 routing graph. Every node but the three agents is deterministic code."""
+    """The §2.1 + §7.1 routing graph. Every node but the four agents is deterministic code."""
     orchestrator_agent = orchestrator.build(
         model_orchestrator,
         agent_id=ORCHESTRATOR_ID,
@@ -196,6 +246,9 @@ def build_graph(
         model_domain, agent_id=DOMAINS[sre_infra.DOMAIN][0], agent_version="v1"
     )
     planner_agent = planner.build(model_planner, agent_id=PLANNER_ID, agent_version=planner_version)
+    verification_agent = verification.build(
+        model_verification, agent_id=VERIFICATION_ID, agent_version=VERIFICATION_VERSION
+    )
 
     def route(ctx: Context, classification: dict[str, Any]) -> None:
         """Registry lookup, not judgement. An unclassifiable incident ends here, visibly."""
@@ -253,9 +306,50 @@ def build_graph(
         decision = await gateway.authorize(scratch.proposal, credential, now=now, client=client)
         scratch.decision = decision
         scratch.outcome = _OUTCOME_FOR[decision.outcome]
+        # A HOLD parks on a human (§2.1 stage 7, item 30) and a DENY is over. Only an
+        # approval continues, and `executor.execute()` re-checks the signature anyway.
+        ctx.route = "EXECUTE" if decision.outcome in executor.APPROVING else "HALT"
+
+    async def execute(ctx: Context) -> None:
+        """The one node that changes the world. Nothing here decides whether it may."""
+        assert scratch.validated is not None and scratch.decision is not None
+        try:
+            scratch.execution = await executor.execute(
+                scratch.validated, scratch.decision, client=client
+            )
+            scratch.post_state = await executor.read_state(scratch.validated.target, client=client)
+        except executor.ExecutionError as error:
+            # §7.3's default posture, made a row in that table: an execution that did not
+            # happen verifies nothing and teaches nothing.
+            scratch.outcome = "ESCALATED"
+            scratch.reasons.append(f"{type(error).__name__}: {error}")
+            ctx.route = "HALT"
+            return
+        ctx.state["success_predicate"] = scratch.validated.success_predicate
+        ctx.state["post_error_rate"] = scratch.post_state.error_rate
+        ctx.state["post_config_version"] = scratch.post_state.config_version
+        ctx.route = "VERIFY"
+
+    async def resolve(ctx: Context, verification: dict[str, Any]) -> None:
+        """§7.2's table: what was learned, and whether the incident is over.
+
+        The parameter name is load-bearing: ADK resolves a node's arguments out of session
+        state by name, so this must be the agent's `output_key`. Same rule as `hand_off`'s
+        `diagnosis` and `validate`'s `proposal`. It shadows the module of the same name,
+        which is why `verification_agent` is bound above rather than built here.
+        """
+        await _resolve(
+            scratch,
+            verification,
+            model=_reasoning.model_name(verification_agent),
+            domain=str(ctx.state.get("routed_domain", "")),
+            agent_id=str(ctx.state.get("routed_to", "")),
+            now=now,
+            client=client,
+        )
 
     def halt() -> None:
-        """The terminal node for the two branches that never reach the gateway."""
+        """The terminal node for every branch that stops before the fleet has learned."""
 
     return Workflow(
         name="incident",
@@ -267,7 +361,102 @@ def build_graph(
             (hand_off, planner_agent),
             (planner_agent, validate),
             (validate, {"AUTHORIZE": authorize, "REPLAN": planner_agent, "ESCALATE": halt}),
+            (authorize, {"EXECUTE": execute, "HALT": halt}),
+            (execute, {"VERIFY": verification_agent, "HALT": halt}),
+            (verification_agent, resolve),
         ],
+    )
+
+
+def _verification_outcome(verified: object) -> VerificationOutcome:
+    """The agent's own enum, or INCONCLUSIVE.
+
+    §7.3 treats a verification agent that errors or times out as INCONCLUSIVE, and an answer
+    that cannot be read is the same thing: escalate, learn nothing. There is no reading of a
+    missing answer that could justify writing a belief.
+    """
+    outcome = verified.get("outcome") if isinstance(verified, Mapping) else None
+    return outcome if outcome in get_args(VerificationOutcome) else "INCONCLUSIVE"  # type: ignore[return-value]
+
+
+async def _resolve(
+    scratch: _Scratch,
+    verified: object,
+    *,
+    model: str,
+    domain: str,
+    agent_id: str,
+    now: datetime,
+    client: Any | None,
+) -> None:
+    """Open `verification.outcome`, apply §7.2's table, and record what came of it.
+
+    | outcome | belief | incident |
+    |---|---|---|
+    | `CONFIRMED` | committed at computed confidence | `RESOLVED` |
+    | `REFUTED` | none (item 19 writes the negative belief) | `ESCALATED` |
+    | `INCONCLUSIVE` | **none** -- no partial credit | `ESCALATED` |
+
+    The span carries `action.predicate_id()`, byte-identical to the one the incident span
+    already carried before anything executed. That pairing is what makes "declared before
+    execution" checkable in the trace rather than asserted in a doc.
+
+    `set_outcome` runs on every path, including the one where the commit was refused, so the
+    span can never exit unrecorded (§8.1).
+    """
+    assert scratch.validated is not None
+    validated = scratch.validated
+    with telemetry.verification_outcome(
+        predicate_id=action.predicate_id(validated),
+        model=model,
+        action_class=validated.action_class,
+        target=validated.target,
+        attempt=1,  # Item 20's bounded re-plan is what makes this ever exceed 1.
+    ) as rec:
+        outcome = _verification_outcome(verified)
+        scratch.verification = outcome
+        if outcome == "CONFIRMED":
+            scratch.belief = await _commit_belief(
+                scratch, domain=domain, agent_id=agent_id, now=now, client=client
+            )
+            scratch.outcome = "RESOLVED"
+        else:
+            scratch.outcome = "ESCALATED"
+        rec.set_outcome(
+            outcome=outcome,
+            belief_written=scratch.belief is not None and scratch.belief.outcome == "COMMIT",
+        )
+
+
+async def _commit_belief(
+    scratch: _Scratch, *, domain: str, agent_id: str, now: datetime, client: Any | None
+) -> policy.BeliefCommit:
+    """One §3.3 Evidence item, built from what code measured, handed to the Policy Engine.
+
+    `source_id` names the read the executor actually performed, not the model that agreed
+    with it, and `verifiable_by` names how a third party would redo it. That is the whole
+    difference between evidence and testimony (§3.3).
+    """
+    assert scratch.validated is not None and scratch.post_state is not None
+    validated = scratch.validated
+    observed_at = now.astimezone(UTC).strftime(policy.TIMESTAMP)
+    evidence = policy.Evidence(
+        id=f"ev-{action.predicate_id(validated)}",
+        source_id=f"firestore:{executor.SERVICES}/{validated.target}",
+        source_class="verified_system_observation",
+        observed_at=observed_at,
+        ingested_at=observed_at,
+        payload_hash=policy.payload_hash(asdict(scratch.post_state)),
+        verifiable_by=f"re-read {executor.SERVICES}/{validated.target}",
+    )
+    return await policy.commit(
+        entity=validated.target,
+        domain=domain,
+        status=BELIEF_STATUS,
+        evidence=[evidence],
+        agent_id=agent_id,
+        now=now,
+        client=client,
     )
 
 
@@ -290,6 +479,7 @@ async def run_incident(
     model_orchestrator: str | object = None,
     model_domain: str | object = None,
     model_planner: str | object = None,
+    model_verification: str | object = None,
 ) -> IncidentResult:
     """One trigger, one incident, one root span. Never raises on a bad proposal.
 
@@ -320,6 +510,7 @@ async def run_incident(
             model_orchestrator=model_orchestrator or models.ORCHESTRATOR,
             model_domain=model_domain or models.DOMAIN,
             model_planner=model_planner or models.PLANNER,
+            model_verification=model_verification or models.VERIFICATION,
         )
 
         sessions = InMemorySessionService()
@@ -327,20 +518,46 @@ async def run_incident(
             app_name=_APP, user_id=incident_id, session_id=incident_id, state=state
         )
         runner = Runner(node=graph, app_name=_APP, session_service=sessions)
-        async for _ in runner.run_async(
-            user_id=incident_id,
-            session_id=incident_id,
-            new_message=types.Content(role="user", parts=[types.Part(text=trigger.signal)]),
-        ):
-            pass
+        try:
+            async for _ in runner.run_async(
+                user_id=incident_id,
+                session_id=incident_id,
+                new_message=types.Content(role="user", parts=[types.Part(text=trigger.signal)]),
+            ):
+                pass
+        except Exception as error:  # noqa: BLE001 -- see below
+            # ADK re-raises a failed node out of the root workflow. Letting that escape would
+            # make a model timeout indistinguishable from "nothing happened": no incident
+            # span outcome, no verification span, and a 500 from `/trigger`. §7.3's posture
+            # is the opposite -- record it, escalate, learn nothing. `scratch.outcome`
+            # already defaults to ESCALATED, and the block below emits the verification span
+            # if an action had already executed.
+            scratch.reasons.append(f"{type(error).__name__}: {error}")
+            scratch.outcome = "ESCALATED"
 
         session = await sessions.get_session(
             app_name=_APP, user_id=incident_id, session_id=incident_id
         )
-        if session is not None and session.state.get("routed_to"):
+        state = {} if session is None else session.state
+        if state.get("routed_to"):
             recorder.set_routing(
-                domain=str(session.state["routed_domain"]),
-                routed_to=str(session.state["routed_to"]),
+                domain=str(state["routed_domain"]),
+                routed_to=str(state["routed_to"]),
+            )
+        if scratch.execution is not None and scratch.verification is None:
+            # §7.3: "verification agent errors/timeouts -> treated as INCONCLUSIVE". ADK
+            # stops the graph on a node failure rather than raising, so the `resolve` node
+            # never ran -- and an executed action that reaches the end of the loop with no
+            # verification span would read as an incident nobody checked. The control loop
+            # owns this the way it owns the malformed count (§7.1).
+            await _resolve(
+                scratch,
+                None,
+                model=str(model_verification or models.VERIFICATION),
+                domain=str(state.get("routed_domain", "")),
+                agent_id=str(state.get("routed_to", "")),
+                now=now,
+                client=client,
             )
         recorder.set_outcome(
             outcome=scratch.outcome,
@@ -356,4 +573,7 @@ async def run_incident(
         decision=scratch.decision,
         action=scratch.validated,
         malformed_attempts=scratch.malformed_attempts,
+        execution=scratch.execution,
+        verification=scratch.verification,
+        belief=scratch.belief,
     )

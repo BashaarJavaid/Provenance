@@ -183,8 +183,7 @@ against a fixed credit.
 Live: **https://provenance-808273007560.us-central1.run.app** (`/health` for the service
 state). The service is public and runs at `min-instances=0`, so it bills nothing idle.
 
-**Wake the fleet** — one trigger, one incident, one signed decision. Nothing executes yet
-(that is item 10); the response is what the gateway decided:
+**Wake the fleet** — one trigger in, one incident run to its end:
 
 ```bash
 curl -X POST https://provenance-808273007560.us-central1.run.app/trigger \
@@ -192,9 +191,20 @@ curl -X POST https://provenance-808273007560.us-central1.run.app/trigger \
   -d '{"target":"inventory-api","observed_value":0.38,"observed_at":"2026-08-21T14:06:00Z"}'
 ```
 
-It takes about a minute: three sequential `gemini-2.5-pro` calls classify the deviation,
+It takes about a minute. Three sequential `gemini-2.5-pro` calls classify the deviation,
 diagnose it, and turn it into one typed `ROLLBACK_CONFIG` action, which the risk table scores
-`1 + 1 + 0 + 0 = 2` and auto-approves. Without the header it answers 403.
+`1 + 1 + 0 + 0 = 2` and auto-approves. Since item 10 the rollback then *executes* — the
+executor re-verifies the signed decision before it writes anything — a `gemini-3.5-flash`
+Verification Agent judges the measured post-state against the success predicate the Planner
+declared **before** execution, and a `CONFIRMED` outcome commits one belief at confidence
+`1 − (1 − 0.60) = 0.60`, computed by §4.3's published formula rather than asserted by any
+model. The response carries all of it: `execution`, `verification` and `belief`, each `null`
+when the path was not taken. Without the header it answers 403.
+
+Inject the fault first if you want the rollback to have something to fix
+(`scripts/inject_fault.py`); note that a second run against the same service will be refused
+at the belief write with `SUPERSESSION_UNSUPPORTED`, because the stub Policy Engine cannot
+write a version that supersedes one (item 12 is what can).
 
 **Seed the synthetic company** — the entity model every incident recurs over:
 

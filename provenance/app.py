@@ -89,7 +89,7 @@ def _authorized(token: str | None) -> bool:
 async def trigger(
     request: TriggerRequest, x_provenance_token: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    """Wake-on-event (§5.3): one trigger in, one signed decision out. Nothing executes."""
+    """Wake-on-event (§5.3): one trigger in, one incident out, run to whatever end it reaches."""
     if not _authorized(x_provenance_token):
         raise HTTPException(status_code=403, detail="missing or invalid trigger token")
     result = await incident.run_incident(
@@ -106,4 +106,9 @@ async def trigger(
         "malformed_attempts": result.malformed_attempts,
         "action": None if result.action is None else asdict(result.action),
         "decision": None if result.decision is None else asdict(result.decision),
+        # Item 10. All three are null unless the path was taken: a held incident executes
+        # nothing, and an INCONCLUSIVE verification writes no belief (§7.2).
+        "execution": None if result.execution is None else asdict(result.execution),
+        "verification": result.verification,
+        "belief": None if result.belief is None else asdict(result.belief),
     }
