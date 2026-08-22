@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check ROADMAP items 9 and 10's `verify:` lines against real GCP and real models.
+"""Check ROADMAP items 9, 10 and 11's `verify:` lines against real GCP and real models.
 
     PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" \
     GOOGLE_CLOUD_PROJECT=provenance-hackathon \
@@ -33,8 +33,14 @@ deletes the belief it wrote -- `policy.py` itself never deletes anything (§6: a
 It refuses to run if the fault switch is already on, or if `beliefs/belief-inventory-api-1`
 already exists, because in either case the restore would cement someone else's state.
 
-Set `PROVENANCE_SERVICE_URL` and `PROVENANCE_TRIGGER_TOKEN` to also check the deployed
-`POST /trigger` route -- 403 unauthenticated, 200 with the token. Skipped, loudly, without them.
+Set `PROVENANCE_SERVICE_URL` and `PROVENANCE_TRIGGER_TOKEN` to also run incident #1 a second
+time *through the deployed service*: 403 unauthenticated, 200 with the token, and the
+`GET /trace` the trace UI reads (item 11). Skipped, loudly, without them. **That half mutates
+stored state too** and takes the identical posture -- refuse against dirt, inject, restore in a
+`try/finally`. It did not until this was fixed, and a clean run left the fixture at v41 with a
+belief present for the next run to trip over. One honest limit: that incident runs *in the
+deployed process*, so a Ctrl-C mid-trigger restores here and the remote incident can still land
+its rollback afterwards. Nothing local can order those, so it warns rather than pretending.
 
 Not run in CI: CI has no credentials and must not spend model tokens. The offline half is
 `tests/test_incident.py`, which is where the malformed-retry and unroutable paths are proved,
@@ -113,6 +119,36 @@ def restore(client: firestore.Client) -> None:
     )
     client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
     client.collection(policy.COLLECTION).document(BELIEF_ID).delete()
+
+
+def refuse_if_dirty(client: firestore.Client) -> bool:
+    """True if live state is already dirty. Prints which condition, and how to clear it.
+
+    Item 8's precedent: refuse rather than cement. Both halves of this script inject and
+    restore, so both call this -- a restore over somebody else's state writes their state
+    back as the baseline, which is worse than the run simply not happening.
+    """
+    switch = client.collection("fault_injection").document(TARGET).get().to_dict() or {}
+    if switch.get("error_rate_spike"):
+        print(
+            f"FAIL: fault_injection/{TARGET}.error_rate_spike is already on. Clear it first,\n"
+            "      or this run's restore would write someone else's state back as baseline:\n"
+            "        .venv/bin/python scripts/inject_fault.py --clear",
+            file=sys.stderr,
+        )
+        return True
+    if client.collection(policy.COLLECTION).document(BELIEF_ID).get().exists:
+        # A pre-existing v1 would make the Policy Engine answer SUPERSESSION_UNSUPPORTED --
+        # correct behaviour, and it would still fail this run -- and the restore would then
+        # delete somebody else's belief on the way out.
+        print(
+            f"FAIL: {policy.COLLECTION}/{BELIEF_ID} already exists. This run would be refused\n"
+            "      as an unsupported supersession, and its restore would delete that document.\n"
+            "      Remove it deliberately, then re-run.",
+            file=sys.stderr,
+        )
+        return True
+    return False
 
 
 def check_result(result: incident.IncidentResult) -> int:
@@ -217,26 +253,7 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
     sync_client = firestore.Client(project=project_id)
     async_client = firestore.AsyncClient(project=project_id)
 
-    switch = sync_client.collection("fault_injection").document(TARGET).get().to_dict() or {}
-    if switch.get("error_rate_spike"):
-        print(
-            f"FAIL: fault_injection/{TARGET}.error_rate_spike is already on. Clear it first,\n"
-            "      or this run's restore would write someone else's state back as baseline:\n"
-            "        .venv/bin/python scripts/inject_fault.py --clear",
-            file=sys.stderr,
-        )
-        return 1, "", None
-    if sync_client.collection(policy.COLLECTION).document(BELIEF_ID).get().exists:
-        # Item 8's precedent: refuse against dirty state rather than cement it. A pre-existing
-        # v1 would make the Policy Engine answer SUPERSESSION_UNSUPPORTED -- which is correct
-        # behaviour and would still fail this run -- and the restore would then delete somebody
-        # else's belief on the way out.
-        print(
-            f"FAIL: {policy.COLLECTION}/{BELIEF_ID} already exists. This run would be refused\n"
-            "      as an unsupported supersession, and its restore would delete that document.\n"
-            "      Remove it deliberately, then re-run.",
-            file=sys.stderr,
-        )
+    if refuse_if_dirty(sync_client):
         return 1, "", None
 
     tracer = trace.get_tracer("provenance.verify_incident_one")
@@ -341,8 +358,10 @@ def check_spans(spans: list[Any], result: Any) -> int:
         fail(f"{len(incidents)} incident span(s) on the trace, expected exactly 1")
     else:
         labels = incidents[0]
-        if attribute(labels, telemetry.ATTR_INCIDENT_OUTCOME) != "RESOLVED":
-            fail(f"the incident span says {attribute(labels, telemetry.ATTR_INCIDENT_OUTCOME)}")
+        before = failures
+        outcome = attribute(labels, telemetry.ATTR_INCIDENT_OUTCOME)
+        if outcome != "RESOLVED":
+            fail(f"the incident span says {outcome}")
         if attribute(labels, telemetry.ATTR_INCIDENT_ROUTED_TO) != "sre-infra-agent":
             fail("the incident span does not record routing to sre-infra-agent")
         # The predicate is on the trace before anything executes -- "pre-declared", checkably.
@@ -350,7 +369,10 @@ def check_spans(spans: list[Any], result: Any) -> int:
         expected = action.predicate_id(result.action) if result.action is not None else None
         if recorded != expected:
             fail(f"the incident span's predicate_id is {recorded}, expected {expected}")
-        print(f"    ok  incident span   RESOLVED  predicate={recorded}")
+        # Only claim ok if nothing above failed: this line used to print a hardcoded
+        # "RESOLVED" unconditionally, so a failing run reported success beside its own FAIL.
+        if failures == before:
+            print(f"    ok  incident span   {outcome}  predicate={recorded}")
 
     chains = by_name.get(telemetry.SPAN_REASONING_CHAIN, [])
     steps = sorted(
@@ -461,8 +483,20 @@ def check_learning_spans(
     return failures
 
 
-def check_deployed_route(url: str, token: str) -> int:
-    """The trigger stream as a cold visitor meets it: guarded, and alive."""
+def check_deployed_route(url: str, token: str, client: firestore.Client) -> int:
+    """The trigger stream as a cold visitor meets it: guarded, alive, and a *real* incident.
+
+    **This mutates stored state**, and for the same reason the local half does: the incident it
+    wakes rolls the service back and writes a belief. It therefore takes the same three-part
+    posture -- refuse against dirt, inject, restore in a `try/finally`. It did not until this
+    was fixed, and a clean run left the fixture stranded at v41 with a belief present, which
+    the *next* run's precondition check would then refuse over.
+
+    Injecting matters beyond tidiness. Before, this ran after `run()`'s restore had already put
+    the baseline back, so it woke the fleet against a nominal service with nothing to diagnose
+    -- four model calls to reach ESCALATED/INCONCLUSIVE and assert almost nothing. Now it is
+    incident #1, end to end, through Cloud Run.
+    """
     body = {
         "target": TARGET,
         "signal": "error_rate",
@@ -470,6 +504,8 @@ def check_deployed_route(url: str, token: str) -> int:
         "observed_at": OBSERVED_AT,
     }
     failures = 0
+
+    # First, because it touches no state and spends nothing.
     unauthenticated = httpx.post(f"{url.rstrip('/')}/trigger", json=body, timeout=30)
     if unauthenticated.status_code != 403:
         print(
@@ -480,18 +516,169 @@ def check_deployed_route(url: str, token: str) -> int:
     else:
         print("    ok  deployed /trigger  403 without the shared secret")
 
-    authenticated = httpx.post(
-        f"{url.rstrip('/')}/trigger", json=body, headers={"X-Provenance-Token": token}, timeout=300
+    if refuse_if_dirty(client):
+        return failures + 1
+
+    print(
+        f"--> injecting the fault for the deployed run: {TARGET} error_rate -> {SPIKED_ERROR_RATE}"
     )
-    if authenticated.status_code != 200:
+    inject(client)
+    completed = False
+    try:
+        authenticated = httpx.post(
+            f"{url.rstrip('/')}/trigger",
+            json=body,
+            headers={"X-Provenance-Token": token},
+            timeout=300,
+        )
+        if authenticated.status_code != 200:
+            print(
+                f"FAIL: /trigger answered {authenticated.status_code} with the token, expected"
+                f" 200\n      {authenticated.text[:300]}",
+                file=sys.stderr,
+            )
+            return failures + 1
+        outcome = str(authenticated.json().get("outcome"))
+        print(f"    ok  deployed /trigger  200 -> {outcome}")
+        # Deliberately not asserting RESOLVED here: until item 11.5 lands the Planner can write
+        # a predicate a successful rollback cannot satisfy, and failing this half over that
+        # would report one defect twice. `check_result` is where that assertion lives.
+        failures += check_deployed_trace(url, outcome)
+        completed = True
+    finally:
+        # Covers the ~60s trigger itself, not just the assertions after it -- a Ctrl-C in that
+        # window is the exact case that stranded the fixture.
+        print("--> restoring: v42, nominal error rate, fault off, belief deleted")
+        restore(client)
+        if not completed:
+            # The limit of a local `try/finally` when the writer is remote. Verified, not
+            # assumed: a SIGINT 25s into the trigger restores correctly here, and the Cloud Run
+            # incident then finishes and writes `current_config_version: v41` *after* the
+            # restore. Nothing in this process can order those two, so say so rather than
+            # report a clean exit over a fixture that is about to go dirty.
+            print(
+                f"WARNING: the deployed incident may still be running and can write {TARGET}\n"
+                "         after this restore. Re-check the fixture in a minute, and clear it:\n"
+                "           .venv/bin/python scripts/inject_fault.py --clear",
+                file=sys.stderr,
+            )
+    return failures
+
+
+# What each incident outcome guarantees reached the stream. Deriving this rather than
+# demanding all five matters: `run()` above restores the fault switch before this runs, so
+# the deployed trigger wakes the fleet against a *healthy* service and legitimately produces
+# a shorter incident. Asserting five shapes regardless would fail on a correct system.
+_SHAPES_IMPLIED_BY = {
+    "RESOLVED": (
+        telemetry.SPAN_INCIDENT,
+        telemetry.SPAN_REASONING_CHAIN,
+        telemetry.SPAN_AUTHORIZATION_DECISION,
+        telemetry.SPAN_VERIFICATION_OUTCOME,
+        telemetry.SPAN_BELIEF_COMMIT,
+    ),
+    "ESCALATED": (telemetry.SPAN_INCIDENT, telemetry.SPAN_REASONING_CHAIN),
+    "AUTHORIZED": (
+        telemetry.SPAN_INCIDENT,
+        telemetry.SPAN_REASONING_CHAIN,
+        telemetry.SPAN_AUTHORIZATION_DECISION,
+    ),
+    "HELD": (
+        telemetry.SPAN_INCIDENT,
+        telemetry.SPAN_REASONING_CHAIN,
+        telemetry.SPAN_AUTHORIZATION_DECISION,
+    ),
+    "DENIED": (
+        telemetry.SPAN_INCIDENT,
+        telemetry.SPAN_REASONING_CHAIN,
+        telemetry.SPAN_AUTHORIZATION_DECISION,
+    ),
+    "UNROUTABLE": (telemetry.SPAN_INCIDENT, telemetry.SPAN_REASONING_CHAIN),
+}
+
+
+def check_deployed_trace(url: str, outcome: str) -> int:
+    """Item 11: what the trace UI reads, checked as a cold browser meets it -- no token.
+
+    This runs straight after the deployed trigger returned, so the incident it just ran is
+    the newest trace in the buffer. Three properties, all of them things a rendered panel
+    would be lying about if they failed.
+    """
+    failures = 0
+    response = httpx.get(f"{url.rstrip('/')}/trace", timeout=30)
+    if response.status_code != 200:
         print(
-            f"FAIL: /trigger answered {authenticated.status_code} with the token, expected 200\n"
-            f"      {authenticated.text[:300]}",
+            f"FAIL: /trace answered {response.status_code} with no token, expected 200",
+            file=sys.stderr,
+        )
+        return 1
+    spans = response.json()
+    if not spans:
+        print("FAIL: /trace served nothing after an incident ran", file=sys.stderr)
+        return 1
+    print("    ok  deployed /trace    200 without a token (a cold browser can watch)")
+
+    # One incident is one trace; the UI renders the newest, so that is what is asserted on.
+    newest = max(spans, key=lambda span: span["start_ns"])["trace_id"]
+    trace_spans = [span for span in spans if span["trace_id"] == newest]
+    shapes = {span["name"] for span in trace_spans}
+    expected = _SHAPES_IMPLIED_BY.get(outcome, _SHAPES_IMPLIED_BY["UNROUTABLE"])
+    missing = set(expected) - shapes
+    if missing:
+        print(
+            f"FAIL: a {outcome} incident should have reached the stream as "
+            f"{sorted(expected)}; /trace is missing {sorted(missing)}",
             file=sys.stderr,
         )
         failures += 1
     else:
-        print(f"    ok  deployed /trigger  200 -> {authenticated.json().get('outcome')}")
+        print(
+            f"    ok  deployed /trace    {len(expected)} shapes a {outcome} incident implies, "
+            f"on trace {newest[:16]}..."
+        )
+
+    # The ledger renders this arithmetic; telemetry.set_risk() refuses to emit a score that
+    # is not its components' sum, so a mismatch here means the panel is rendering a fiction.
+    for span in trace_spans:
+        if span["name"] != telemetry.SPAN_AUTHORIZATION_DECISION:
+            continue
+        attrs = span["attrs"]
+        if telemetry.ATTR_RISK_SCORE not in attrs:
+            continue
+        components = sum(
+            attrs[key]
+            for key in (
+                telemetry.ATTR_RISK_BASE,
+                telemetry.ATTR_RISK_CRITICALITY,
+                telemetry.ATTR_RISK_BLAST,
+                telemetry.ATTR_RISK_IRREVERSIBILITY,
+            )
+        )
+        if components != attrs[telemetry.ATTR_RISK_SCORE]:
+            print(
+                f"FAIL: /trace served score {attrs[telemetry.ATTR_RISK_SCORE]} over "
+                f"components summing to {components}",
+                file=sys.stderr,
+            )
+            failures += 1
+        else:
+            print(
+                f"    ok  deployed /trace    risk {attrs[telemetry.ATTR_RISK_SCORE]} = its components"
+            )
+
+    # §8.1's redaction rule, checked on the bytes a public endpoint actually serves.
+    forbidden = ("prompt", "rationale", "payload", "text", "content", "message", "body")
+    leaked = sorted(
+        key
+        for span in trace_spans
+        for key in span["attrs"]
+        if any(part in key for part in forbidden)
+    )
+    if leaked:
+        print(f"FAIL: /trace served content-bearing attributes: {leaked}", file=sys.stderr)
+        failures += 1
+    else:
+        print("    ok  deployed /trace    identifiers, hashes, enums and numbers only")
     return failures
 
 
@@ -531,7 +718,8 @@ def main() -> int:
     token = os.environ.get("PROVENANCE_TRIGGER_TOKEN")
     if service_url and token:
         print(f"--> checking the deployed trigger stream at {service_url}")
-        failures += check_deployed_route(service_url, token)
+        # One client, built where the project id was already resolved.
+        failures += check_deployed_route(service_url, token, firestore.Client(project=project_id))
     else:
         print(
             "--> SKIPPED the deployed /trigger check "

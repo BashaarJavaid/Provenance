@@ -34,15 +34,18 @@ as a clean one.
 from __future__ import annotations
 
 import os
+from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Literal, get_args
 
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import Span as SdkSpan
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Status, StatusCode
 
@@ -149,20 +152,95 @@ _SERVICE = "provenance"
 # --- setup ----------------------------------------------------------------------------
 
 
-def configure_tracing(project_id: str | None = None) -> bool:
-    """Export spans to Cloud Trace. Returns False (a no-op tracer) with no project set.
+# ~70 incidents of history (7 provenance spans each). Large enough that a re-run mid-demo
+# cannot evict the run in progress, small enough to be a rounding error in a 512Mi container.
+BUFFER_SIZE = 500
 
-    Emitting is therefore always safe: CI and local runs need no credentials, and no
-    call site has to guard on whether telemetry is configured.
+
+class _SpanBuffer(SpanProcessor):
+    """The trace UI's read side (item 11): the same spans Cloud Trace gets, held in process.
+
+    §8 says the UI reads the one stream, and this is that stream rather than a copy of it --
+    a second processor on the same provider, holding references to the very span objects
+    `BatchSpanProcessor` exports. Cloud Trace stays the durable record; this is the live one.
+
+    Spans are captured at **start**, not at end, because "live fleet view -- agents, current
+    state" (§8.2) is only true if an in-flight agent is visible. A `reasoning.chain` span
+    stays open for the whole model call, so on-end capture would leave the panel blank for
+    ~20 seconds and then paint a finished row. An SDK span's attributes are readable while
+    it is still recording and its `end_time` is None until it closes, so `snapshot()` reads
+    current state at poll time and one deque entry serves both states.
+
+    ponytail: in-process and unpersisted -- it dies with the container, and a scaled-out
+    second instance has its own. `scripts/deploy.sh` pins --max-instances=1 for that reason.
+    The upgrade path, if a surface ever needs history across restarts, is Cloud Trace
+    read-back (ADR-015) -- at the 15s-2min indexing lag item 2 measured.
+    """
+
+    def __init__(self) -> None:
+        self._spans: deque[ReadableSpan] = deque(maxlen=BUFFER_SIZE)
+
+    def on_start(self, span: SdkSpan, parent_context: Context | None = None) -> None:
+        # Our five shapes only. ADK auto-instruments its own spans onto the same provider --
+        # roughly twenty per incident (`agent ...`, `call_llm ...`, one per graph node) -- and
+        # §8.1 gives them the `provenance.` prefix precisely so they can be told apart. They
+        # still reach Cloud Trace through the other processor; keeping them here would only
+        # quadruple the payload the UI polls and cut the buffer's history to a quarter.
+        if span.name.startswith("provenance."):
+            self._spans.append(span)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        """Nothing to do: the span is already held, and ending it mutates what we hold."""
+
+    def snapshot(self) -> list[dict[str, object]]:
+        """Every held span as it reads *now* -- running ones included."""
+        return [_serialize(span) for span in list(self._spans)]
+
+    def clear(self) -> None:
+        self._spans.clear()
+
+
+BUFFER = _SpanBuffer()
+
+
+def _serialize(span: ReadableSpan) -> dict[str, object]:
+    """One span as JSON. Attributes pass through whole -- §8.1 already forbids content."""
+    context = span.get_span_context()
+    parent = span.parent
+    return {
+        # A ReadableSpan's context is typed optional; in practice the SDK always sets one.
+        "trace_id": "" if context is None else format(context.trace_id, "032x"),
+        "span_id": "" if context is None else format(context.span_id, "016x"),
+        "parent_id": None if parent is None else format(parent.span_id, "016x"),
+        "name": span.name,
+        "running": span.end_time is None,
+        "start_ns": span.start_time,
+        "end_ns": span.end_time,
+        "status": span.status.status_code.name,
+        "attrs": dict(span.attributes or {}),
+    }
+
+
+def configure_tracing(project_id: str | None = None) -> bool:
+    """Wire the one stream. Returns whether **Cloud Trace export** is configured.
+
+    The provider and the in-process `BUFFER` are always set up, so the trace UI works with
+    no credentials -- locally and in CI. Only the Cloud Trace exporter needs a project, and
+    that is what the return value reports: `/health`'s `tracing` field means "the durable
+    half is wired", which on Cloud Run is a deployment fault worth seeing.
+
+    Emitting is safe either way: no call site has to guard on whether telemetry is
+    configured.
     """
     project_id = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    provider = TracerProvider(resource=Resource.create({SERVICE_NAME: _SERVICE}))
+    provider.add_span_processor(BUFFER)
+    trace.set_tracer_provider(provider)
     if not project_id:
         return False
-    provider = TracerProvider(resource=Resource.create({SERVICE_NAME: _SERVICE}))
     # opentelemetry-exporter-gcp-trace ships no py.typed, so its constructor reads as untyped.
     exporter = CloudTraceSpanExporter(project_id=project_id)  # type: ignore[no-untyped-call]
     provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
     return True
 
 
