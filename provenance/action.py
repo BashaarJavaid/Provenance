@@ -39,6 +39,7 @@ Schema reasoning in `docs/adr/ADR-011`.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -227,3 +228,19 @@ def outcome_for(attempts: int) -> MalformedOutcome:
     if attempts < 1:
         raise ValueError(f"attempts: {attempts} is not a malformed emission")
     return "REJECT" if attempts <= MALFORMED_RETRY_BUDGET else "ESCALATE"
+
+
+def predicate_id(action: Action) -> str:
+    """A stable id for the §3.1 success predicate, derived from the predicate itself.
+
+    `telemetry.verification_outcome` takes a `predicate_id`, and §8.1 forbids prose on a
+    span, so the predicate reaches the trace as a hash. Deriving it rather than assigning
+    one per incident is what makes it comparable: the same predicate hashes identically in
+    every process and every run, so item 10's verification span and item 9's incident span
+    can be matched against each other, and two incidents declaring the same predicate are
+    visibly declaring the same thing.
+
+    Sixteen hex characters. This identifies a string, it does not protect one -- nothing
+    downstream trusts a predicate because its hash matched.
+    """
+    return hashlib.sha256(action.success_predicate.encode()).hexdigest()[:16]

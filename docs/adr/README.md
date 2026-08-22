@@ -14,3 +14,4 @@ One file per consequential architecture decision. Load the specific ADR relevant
 - [`ADR-010-agent-registry-record.md`](./ADR-010-agent-registry-record.md) — The agent registry record: flat `agents/{id}`, stored standing authoritative, the rolling window given a number
 - [`ADR-011-tool-registry-and-action-validation.md`](./ADR-011-tool-registry-and-action-validation.md) — The tool registry as a constant (not Firestore), the Action's eight fields and no `params`, validation that raises
 - [`ADR-012-the-gateway.md`](./ADR-012-the-gateway.md) — The gateway: the agent signs its own credential, RBAC and ABAC split, a `Decision` of our own, and an ephemeral signing key
+- [`ADR-013-trigger-stream-and-incident-graph.md`](./ADR-013-trigger-stream-and-incident-graph.md) — The trigger stream as a guarded HTTP route (vs a Firestore listener), the incident loop as a real ADK graph, and `Trigger` as a non-canonical object

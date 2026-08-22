@@ -4,14 +4,21 @@
 gateway ledger, the audit log, and the counterfactual A/B all read *these* spans, so the
 vocabulary is a contract rather than whatever each emitter happens to attach.
 
-Four shapes, one per authority-relevant event:
+Five shapes, one per authority-relevant event:
 
 | Span | Source |
 |---|---|
+| `provenance.incident`              | the control loop (§5.3) — the root every other span nests under |
 | `provenance.authorization.decision` | the action pipeline (§2.1), risk arithmetic (§4.2) |
 | `provenance.belief.commit`         | the memory write pipeline (§2.2) |
 | `provenance.verification.outcome`  | three-valued verification (§7.2) |
 | `provenance.reasoning.chain`       | what a model considered, structurally |
+
+`provenance.incident` is the one shape added after this contract was first written. Item 2
+shipped four and recorded that the root span "arrives with the Orchestrator in item 9",
+because until a control loop existed there was nothing for the other four to hang from and
+no honest way to decide what a root span should carry. It arrives under the condition item 2
+set: module, `ARCHITECTURE.md` §8.1 and `tests/test_telemetry_schema.py` in one commit.
 
 **Attributes carry identifiers, hashes, enums and numbers — never content.** No payload
 text, no prompt, no model output, no rationale prose. Evidence appears as IDs and source
@@ -57,11 +64,23 @@ SourceClass = Literal[
     "unverified_external_claim",
 ]
 VerificationOutcome = Literal["CONFIRMED", "REFUTED", "INCONCLUSIVE"]
+TriggerSignal = Literal["error_rate"]
+IncidentOutcome = Literal["AUTHORIZED", "HELD", "DENIED", "ESCALATED", "UNROUTABLE"]
 
+SPAN_INCIDENT = "provenance.incident"
 SPAN_AUTHORIZATION_DECISION = "provenance.authorization.decision"
 SPAN_BELIEF_COMMIT = "provenance.belief.commit"
 SPAN_VERIFICATION_OUTCOME = "provenance.verification.outcome"
 SPAN_REASONING_CHAIN = "provenance.reasoning.chain"
+
+ATTR_INCIDENT_ID = "provenance.incident.id"
+ATTR_INCIDENT_TRIGGER_TARGET = "provenance.incident.trigger_target"
+ATTR_INCIDENT_TRIGGER_SIGNAL = "provenance.incident.trigger_signal"
+ATTR_INCIDENT_DOMAIN = "provenance.incident.domain"
+ATTR_INCIDENT_ROUTED_TO = "provenance.incident.routed_to"
+ATTR_INCIDENT_PREDICATE_ID = "provenance.incident.predicate_id"
+ATTR_INCIDENT_MALFORMED_ATTEMPTS = "provenance.incident.malformed_attempts"
+ATTR_INCIDENT_OUTCOME = "provenance.incident.outcome"
 
 ATTR_AGENT_ID = "provenance.agent.id"
 ATTR_AGENT_VERSION = "provenance.agent.version"
@@ -114,8 +133,9 @@ ATTR_DECISION_STAGE = "provenance.decision.stage"
 ATTR_DECISION_SIGNATURE = "provenance.decision.signature"
 
 # Outcomes that are failures of the thing being traced, not of the tracing.
-# INCONCLUSIVE is deliberately absent: ambiguity is an honest result (§7.2).
-_ERROR_OUTCOMES = frozenset({"DENY", "REJECT", "REFUTED"})
+# INCONCLUSIVE is deliberately absent: ambiguity is an honest result (§7.2). So is HELD:
+# an incident waiting on a human is working exactly as §2.1 stage 7 designed it.
+_ERROR_OUTCOMES = frozenset({"DENY", "REJECT", "REFUTED", "DENIED", "ESCALATED", "UNROUTABLE"})
 
 _SERVICE = "provenance"
 
@@ -195,6 +215,69 @@ def _shape[R: _Recorder](
         if not rec.recorded:
             # A decision that never reached an outcome is not a clean one (§7.3).
             span.set_status(Status(StatusCode.ERROR, "outcome never recorded"))
+
+
+class IncidentRecorder(_Recorder):
+    def set_routing(self, *, domain: str, routed_to: str) -> None:
+        """Record where the Orchestrator sent this incident. Not called when nothing matched.
+
+        Split from `set_outcome` for the same reason `set_risk` is: an incident whose
+        classified domain has no registered agent terminates as UNROUTABLE, and its span
+        should carry no `routed_to` rather than an invented one.
+        """
+        self.span.set_attribute(ATTR_INCIDENT_DOMAIN, domain)
+        self.span.set_attribute(ATTR_INCIDENT_ROUTED_TO, routed_to)
+
+    def set_outcome(
+        self,
+        *,
+        outcome: IncidentOutcome,
+        malformed_attempts: int,
+        predicate_id: str | None = None,
+    ) -> None:
+        """`predicate_id` is the §3.1 success predicate, hashed (`action.predicate_id`).
+
+        Carrying it here is what makes "pre-declared" checkable rather than asserted: the id
+        is on the incident span before anything executes, and item 10's
+        `provenance.verification.outcome` span carries the same id afterwards. An incident
+        that never produced a valid Action has no predicate, so it stays optional.
+        """
+        self._finish(
+            _enum(outcome, IncidentOutcome, ATTR_INCIDENT_OUTCOME),
+            {
+                ATTR_INCIDENT_OUTCOME: outcome,
+                ATTR_INCIDENT_MALFORMED_ATTEMPTS: malformed_attempts,
+                ATTR_INCIDENT_PREDICATE_ID: predicate_id,
+            },
+        )
+
+
+@contextmanager
+def incident(
+    *,
+    incident_id: str,
+    trigger_target: str,
+    trigger_signal: TriggerSignal,
+) -> Iterator[IncidentRecorder]:
+    """The control loop's root span (§5.3): one per trigger, every other span nests under it.
+
+    Only the three facts that exist at wake-on-event time are opened with. Everything the
+    fleet then works out — the domain, the agent it routed to, the predicate it declared, how
+    many malformed emissions it absorbed — arrives through the recorder, so a span never
+    claims knowledge the loop did not have when it stopped.
+    """
+    with _shape(
+        SPAN_INCIDENT,
+        {
+            ATTR_INCIDENT_ID: incident_id,
+            ATTR_INCIDENT_TRIGGER_TARGET: trigger_target,
+            ATTR_INCIDENT_TRIGGER_SIGNAL: _enum(
+                trigger_signal, TriggerSignal, ATTR_INCIDENT_TRIGGER_SIGNAL
+            ),
+        },
+        IncidentRecorder,
+    ) as rec:
+        yield rec
 
 
 class AuthorizationRecorder(_Recorder):

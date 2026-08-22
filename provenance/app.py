@@ -4,26 +4,38 @@
 UI (item 11), the approval queue (item 30), and the cold-visitor test (item 36) all
 assume a live URL to build on. This module is that URL and nothing more.
 
-Deliberately absent: any action endpoint and any auth. The gateway is a *pipeline* (§2.1),
-not an endpoint, and the typed Action it carries does not exist until item 6 — an endpoint
-stub now would be a request shape invented ahead of its object. `provenance/registry.py`
-(item 5) does read Firestore, but from the request path, not from here: no route in this
-module touches the database, and the registry panel §8.2 describes is item 11's.
-ADK routes and delegates; it does not serve this app (`docs/adr/ADR-007`, ADR-008).
+`POST /trigger` arrived with item 9 and is the "live trigger stream" §5.3 names. It is the
+*wake* signal, not an action endpoint: it hands a `Trigger` to the control loop and returns
+what the gateway decided. There is still no route that authorizes anything — the gateway is
+a pipeline (§2.1), reached only through `incident.run_incident`, and §1.1 property 1 holds
+because this module has no other way in. ADK routes and delegates; it does not serve this
+app (`docs/adr/ADR-007`, ADR-008).
+
+The trigger is guarded by a shared secret rather than left open. The service is public and
+unauthenticated by design (item 36's cold judge), and every trigger spends model tokens
+against a fixed credit; an open endpoint is a loop somebody else gets to run. The registry
+panel §8.2 describes is still item 11's, and no route here reads Firestore directly.
 """
 
 from __future__ import annotations
 
+import hmac
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
-from provenance import telemetry
+from provenance import incident, telemetry
+from provenance.telemetry import TriggerSignal
+
+TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
 
 _SHELL = Path(__file__).parent / "web" / "index.html"
 _VERSION = version("provenance")
@@ -54,3 +66,44 @@ async def health() -> dict[str, Any]:
 @app.get("/")
 async def shell() -> FileResponse:
     return FileResponse(_SHELL, media_type="text/html")
+
+
+class TriggerRequest(BaseModel):
+    """The wire shape of a trigger. Validated here so a malformed body never wakes the fleet."""
+
+    target: str
+    signal: TriggerSignal = "error_rate"
+    observed_value: float
+    observed_at: str = Field(description="ISO-8601 with a Z suffix.")
+
+
+def _authorized(token: str | None) -> bool:
+    """Constant-time compare, and fail closed when the service was deployed without a token."""
+    expected = os.environ.get(TRIGGER_TOKEN_ENV)
+    if not expected:
+        return False
+    return token is not None and hmac.compare_digest(token, expected)
+
+
+@app.post("/trigger")
+async def trigger(
+    request: TriggerRequest, x_provenance_token: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Wake-on-event (§5.3): one trigger in, one signed decision out. Nothing executes."""
+    if not _authorized(x_provenance_token):
+        raise HTTPException(status_code=403, detail="missing or invalid trigger token")
+    result = await incident.run_incident(
+        incident.Trigger(
+            target=request.target,
+            signal=request.signal,
+            observed_value=request.observed_value,
+            observed_at=request.observed_at,
+        )
+    )
+    return {
+        "incident_id": result.incident_id,
+        "outcome": result.outcome,
+        "malformed_attempts": result.malformed_attempts,
+        "action": None if result.action is None else asdict(result.action),
+        "decision": None if result.decision is None else asdict(result.decision),
+    }
