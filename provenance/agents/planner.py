@@ -75,6 +75,8 @@ def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent
             "  service: {trigger_target} (tier {target_tier})\n"
             "  currently deployed config version: {current_config_version}\n"
             "  last known-good config version: {known_good_version}\n"
+            "  nominal (healthy) error rate: {nominal_error_rate} "
+            "({nominal_error_rate_pct}%)\n"
             "  diagnosis: {diagnosis_summary}\n\n"
             "Emit exactly one action that addresses the diagnosed cause.\n"
             "  - action_class must be one of: {known_action_classes}\n"
@@ -88,9 +90,16 @@ def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent
             "metric, the threshold and the window. It must be checkable against the target "
             "service's observable state -- its error rate and its deployed config version -- "
             "and must state a concrete numeric threshold, because a verification agent will "
-            "be shown only those measurements and your sentence.\n\n"
-            "Do not carry a version number in any field: the executor reads the known-good "
-            "version from the entity model.\n"
+            "be shown only those measurements and your sentence. The threshold you name must "
+            "be strictly above the nominal error rate given above: a remediation that fully "
+            "succeeds returns the service to exactly that value, so a threshold at it is "
+            "unsatisfiable no matter how well the remediation worked. State every value "
+            "literally rather than by reference -- the verification agent is shown the "
+            "deployed config version but not what 'known-good' refers to, so write \"is "
+            '{known_good_version}" and never "matches the last known-good version".\n\n'
+            "Outside the success predicate, do not carry a version number in any field: the "
+            "executor reads the known-good version from the entity model, so a version in "
+            "your sentence is something to be checked and never something to be obeyed.\n"
             "{malformed_feedback}"
         ),
         output_schema=Proposal,

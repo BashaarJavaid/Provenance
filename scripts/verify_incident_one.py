@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check ROADMAP items 9, 10 and 11's `verify:` lines against real GCP and real models.
+"""Check ROADMAP items 9, 10, 11 and 11.5's `verify:` lines against real GCP and real models.
 
     PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" \
     GOOGLE_CLOUD_PROJECT=provenance-hackathon \
@@ -10,6 +10,12 @@ Item 9's line: "the injected `inventory-api` error-rate spike produces exactly o
 `ROLLBACK_CONFIG` proposal, risk 2, auto-approved."
 Item 10's: "rollback executes on the synthetic service, error rate drops, verification returns
 CONFIRMED against the predicate declared before execution."
+Item 11.5's: "ten consecutive incident #1 runs all reach RESOLVED, and no run's
+`success_predicate` names a threshold at or below the service's nominal error rate" -- which is
+what `--runs 10` is for. Each run injects and restores around itself, because the restore is
+what deletes the belief a second run would otherwise be refused for superseding, and the loop
+finishes all ten even after a failure: one bad run in ten and seven in ten are different
+findings, and both defects item 11.5 fixed were intermittent.
 
 Four real Gemini calls sit between the trigger and the belief, so the point of this script is
 that the *deterministic* half holds whatever the models say: the tool registry and entity model
@@ -49,8 +55,10 @@ since a real model cannot be asked to misbehave on cue.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -80,6 +88,22 @@ EXPECTED_COMPONENTS = (1, 1, 0, 0)
 # `1 - (1 - 0.60) = 0.60` from a single fresh `verified_system_observation`.
 BELIEF_ID = f"belief-{TARGET}-1"
 EXPECTED_CONFIDENCE = 0.60
+
+# Item 11.5's second `verify:` clause: "no run's success_predicate names a threshold at or
+# below the service's nominal error rate". A percentage, or a bare decimal below 1 -- so
+# "below 0.5% within 10 minutes, config version v41" yields [0.005] and not [0.005, 10, 41].
+# Deliberately here and not in `provenance/`: the fix upstream is a prompt clause, and a regex
+# over natural language on the production path would spend §7.1's single retry budget on a
+# failure that is not a schema failure. Here the worst it can do is print.
+_THRESHOLD = re.compile(r"(\d+(?:\.\d+)?)\s*%|\b(0\.\d+)\b")
+
+
+def thresholds(predicate: str) -> list[float]:
+    """Every rate the sentence names, normalised to a fraction."""
+    found: list[float] = []
+    for percent, decimal in _THRESHOLD.findall(predicate):
+        found.append(float(percent) / 100 if percent else float(decimal))
+    return found
 
 
 def load_private_key(pem: str) -> ec.EllipticCurvePrivateKey:
@@ -174,6 +198,20 @@ def check_result(result: incident.IncidentResult) -> int:
         fail(f"target is {result.action.target}, expected {TARGET}")
     if not result.action.success_predicate.strip():
         fail("the Action declares no success predicate")
+    else:
+        # Item 11.5. A successful rollback writes the nominal rate back verbatim, so a
+        # threshold *at* it is unsatisfiable and REFUTED is the honest answer to it. The bug
+        # that produced that was upstream of verification, and this is where it is caught.
+        nominal = company.service(TARGET).error_rate
+        named = thresholds(result.action.success_predicate)
+        if not named:
+            print(f"WARN: no numeric threshold parsed out of {result.action.success_predicate!r}")
+        for value in named:
+            if value <= nominal:
+                fail(
+                    f"the predicate names {value}, at or below the nominal error rate "
+                    f"{nominal}; a fully successful rollback could not satisfy it"
+                )
 
     if result.decision is None:
         fail("no decision was reached")
@@ -683,6 +721,23 @@ def check_deployed_trace(url: str, outcome: str) -> int:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "how many consecutive incidents to run (item 11.5's `verify:` line is 10). "
+            "Each one injects and restores around itself, because the restore is what "
+            "deletes the belief a second run would otherwise be refused for superseding."
+        ),
+    )
+    args = parser.parse_args()
+    if args.runs < 1:
+        print("--runs must be at least 1.", file=sys.stderr)
+        return 1
+
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
     pem = os.environ.get(incident.PLANNER_KEY_ENV)
     if not project_id:
@@ -699,9 +754,38 @@ def main() -> int:
         print("tracing did not configure; the spans would not be exported.", file=sys.stderr)
         return 1
 
-    failures, trace_id, result = asyncio.run(run(project_id, load_private_key(pem)))
-    if not trace_id:
-        return 1
+    private_key = load_private_key(pem)
+    failures = 0
+    resolved = 0
+    predicates: list[str] = []
+    for attempt in range(1, args.runs + 1):
+        if args.runs > 1:
+            print(f"\n=== run {attempt}/{args.runs} " + "=" * 48)
+        # Every run restores itself, so a failure strands nothing and the loop keeps going:
+        # "1 of 10 bad" and "7 of 10 bad" are different findings, and both defects item 11.5
+        # fixes were intermittent. Stopping at the first would not tell them apart.
+        run_failures, trace_id, result = asyncio.run(run(project_id, private_key))
+        failures += run_failures
+        if not trace_id:
+            return 1
+        if result is not None:
+            resolved += result.outcome == "RESOLVED"
+            if result.action is not None:
+                predicates.append(result.action.success_predicate)
+
+    if args.runs > 1:
+        print(f"\n--> {resolved}/{args.runs} runs reached RESOLVED. The predicates declared:")
+        for index, predicate in enumerate(predicates, start=1):
+            print(f"    {index:2}. {predicate}")
+        named = [value for predicate in predicates for value in thresholds(predicate)]
+        if named:
+            print(
+                f"    lowest threshold named: {min(named)} "
+                f"against a nominal {company.service(TARGET).error_rate}"
+            )
+        if resolved != args.runs:
+            print(f"FAIL: {resolved}/{args.runs} reached RESOLVED, expected all", file=sys.stderr)
+            failures += 1
     provider = trace.get_tracer_provider()
     provider.force_flush()  # type: ignore[attr-defined]
 

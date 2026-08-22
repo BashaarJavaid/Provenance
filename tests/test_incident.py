@@ -349,6 +349,42 @@ def test_the_replan_prompt_carries_the_rejection_reason(spans: InMemorySpanExpor
     assert "RESTART_EVERYTHING" in model.prompts[-2], "the re-plan prompt carried no reason"
 
 
+def test_the_planner_is_told_what_healthy_looks_like(spans: InMemorySpanExporter) -> None:
+    """Item 11.5: a Planner that does not know nominal writes a predicate nothing can satisfy.
+
+    Found live, not designed. One run in three declared "less than 1%" against a service whose
+    healthy error rate is exactly 0.01, and `REFUTED` was the honest answer -- the rollback had
+    worked. The number must come off the frozen fixture, never off the trigger: the store this
+    test runs against holds the *spiked* 0.38, so sourcing it from what was observed turns the
+    last assertion red.
+
+    The ten-run verification then found the sibling defect: a predicate that is satisfiable but
+    not *checkable*. One run wrote "the deployed config version will match the last known-good
+    version", and the Verification Agent -- shown the deployed version but never told what
+    known-good means -- answered `INCONCLUSIVE`, again honestly. Hence the second clause: name
+    values literally, not by reference.
+    """
+    model = FakeLlm(model="fake-model", replies=a_clean_run(), prompts=[])
+    asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=a_store(),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+    planning = model.prompts[2]  # orchestrator, sre_infra, planner
+    assert "0.01" in planning and "1%" in planning, (
+        "the Planner was not told nominal, in both units"
+    )
+    assert "strictly above" in planning, "the Planner was not given the floor"
+    assert "0.38" not in planning, "the Planner was told the spiked rate, not the nominal one"
+    assert 'is v41" and never' in planning, "the Planner was not told to name values literally"
+
+
 # --- routing ------------------------------------------------------------------------------
 
 
