@@ -824,3 +824,66 @@ def test_an_unwritable_ledger_escalates_rather_than_executing() -> None:
     assert result.execution is None, "nothing may execute on an unrecorded authorization"
     assert result.verification is None
     assert store.collections["services"]["inventory-api"]["error_rate"] == 0.38, "no rollback"
+
+
+# --- incident #2: the fleet remembers (item 18) -------------------------------------------
+
+
+def test_recall_reaches_the_first_span_before_the_domain_agent_has_a_hypothesis(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 18's `verify:` line, offline: the only assertion in this suite about span *order*.
+
+    There is no dedicated recall span and deliberately no sixth shape. `recall()` resolves in
+    `run_incident()` before `build_graph()`, so what the trace can show is stronger than the
+    line asks for: the very first reasoning span the graph opens already carries the recalled
+    belief, and it opened before the domain agent's span did. Reverse the comparison and this
+    goes red; move the recall call after `build_graph()` and the attribute goes empty.
+    """
+    store = a_store()
+    a_prior_belief(store, a_prior_version(1))
+
+    result = run(a_clean_run(), store=store)
+
+    assert result.outcome == "RESOLVED"
+    by_step = {
+        span.attributes["provenance.reasoning.step"]: span
+        for span in spans.get_finished_spans()
+        if span.name == telemetry.SPAN_REASONING_CHAIN and span.attributes is not None
+    }
+    classification, diagnosis = by_step["classification"], by_step["diagnosis"]
+    assert classification.attributes is not None and diagnosis.attributes is not None
+    assert classification.attributes["provenance.recall.belief_ids"] == ("belief-inventory-api",)
+    assert classification.start_time < diagnosis.start_time
+
+
+def test_a_second_incident_supersedes_the_belief_the_first_one_wrote() -> None:
+    """The same deviation twice, with memory left standing in between.
+
+    The confidence does not move, and that is §4.3 rather than a disappointment: both runs
+    contribute `verified_system_observation`, and the formula collapses a source class to its
+    least-decayed item. What changes is the version and what the ledger cites — memory
+    accumulated evidence, not certainty.
+
+    The two `now` values are a minute apart on purpose. §2.2's novelty check compares
+    `(source_id, observed_at)` pairs and `beliefs.TIMESTAMP` has second resolution, so two
+    runs inside one second would be refused `NO_NEW_EVIDENCE` — correctly.
+    """
+    store = a_store()
+
+    first = run(a_clean_run(), store=store, now=NOW)
+    second = run(a_clean_run(), store=store, now=NOW + timedelta(minutes=1))
+
+    assert (first.outcome, second.outcome) == ("RESOLVED", "RESOLVED")
+    assert first.belief is not None and second.belief is not None
+    assert (first.belief.version, second.belief.version) == (1, 2)
+    assert second.belief.outcome == "COMMIT"
+    assert second.belief.confidence == first.belief.confidence == 0.60
+
+    current = asyncio.run(beliefs.current("belief-inventory-api", client=store))
+    assert current.supersedes == 1
+    assert len(current.evidence_ids) == 2, "a superseding version cites the accumulated set"
+
+    cold, remembered = ledger(store)
+    assert cold["belief_ids"] == [], "the first incident had nothing to recall"
+    assert remembered["belief_ids"] == ["belief-inventory-api"]
