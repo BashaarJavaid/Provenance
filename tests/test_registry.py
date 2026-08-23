@@ -17,6 +17,7 @@ import asyncio
 import importlib.util
 import inspect
 import types
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
@@ -43,8 +44,9 @@ _spec.loader.exec_module(seed_registry)
 
 
 class FakeSnapshot:
-    def __init__(self, data: dict[str, Any] | None) -> None:
+    def __init__(self, data: dict[str, Any] | None, doc_id: str = "") -> None:
         self._data = data
+        self.id = doc_id
 
     @property
     def exists(self) -> bool:
@@ -63,7 +65,7 @@ class FakeDocument:
     async def get(self) -> FakeSnapshot:
         if self._store.error is not None:
             raise self._store.error
-        return FakeSnapshot(self._docs.get(self._id))
+        return FakeSnapshot(self._docs.get(self._id), self._id)
 
     async def update(self, fields: dict[str, Any]) -> None:
         if self._store.error is not None:
@@ -111,6 +113,30 @@ class _FakeCollection:
 
     def document(self, doc_id: str) -> FakeDocument:
         return FakeDocument(self._store, self._docs, doc_id)
+
+    def where(self, *, filter: Any) -> _FakeQuery:
+        """Item 15's `audit.flag()` is the one caller, and `array_contains` its one operator."""
+        field, op, value = filter.field_path, filter.op_string, filter.value
+        if op != "array_contains":
+            raise NotImplementedError(f"the fake store supports array_contains, not {op!r}")
+        return _FakeQuery(self._store, self._docs, field, value)
+
+
+class _FakeQuery:
+    def __init__(
+        self, store: FakeFirestore, docs: dict[str, dict[str, Any]], field: str, value: Any
+    ) -> None:
+        self._store = store
+        self._docs = docs
+        self._field = field
+        self._value = value
+
+    async def stream(self) -> AsyncIterator[FakeSnapshot]:
+        if self._store.error is not None:
+            raise self._store.error
+        for doc_id, data in list(self._docs.items()):
+            if self._value in data.get(self._field, []):
+                yield FakeSnapshot(data, doc_id)
 
 
 def a_stored_agent(**overrides: Any) -> dict[str, Any]:

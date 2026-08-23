@@ -34,13 +34,14 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.api_core.exceptions import ServiceUnavailable
 from google.genai import types
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from pydantic import Field
 from test_registry import FakeFirestore
 
-from provenance import beliefs, incident, policy, registry, telemetry
+from provenance import audit, beliefs, incident, policy, registry, telemetry
 from provenance.synthetic import company
 
 _EXPORTER = attach_exporter()
@@ -124,6 +125,7 @@ def a_store(*, sre: dict[str, Any] | None = None, **overrides: Any) -> FakeFires
         },
         fault_injection={"inventory-api": {"error_rate_spike": True, "rollback_fails": False}},
         beliefs={},
+        authorizations={},
     )
 
 
@@ -636,3 +638,78 @@ def test_a_planner_that_lost_its_memory_domain_still_executes_but_learns_nothing
     )
     assert verified.attributes is not None
     assert verified.attributes["provenance.verification.belief_written"] is False
+
+
+# --- the authorization ledger (item 15) --------------------------------------------------------
+
+
+def ledger(store: FakeFirestore) -> list[dict[str, Any]]:
+    return list(store.collections[audit.COLLECTION].values())
+
+
+def test_an_authorized_action_is_written_to_the_ledger() -> None:
+    """§6.4's join, built here because nothing else records what an action rested on.
+
+    `belief_ids` is empty because `recall()` is still item 16's stub — that is the honest
+    state, and it is exactly what makes the record worth writing now: the moment recall
+    returns ids, a retraction of one of them can find this action.
+    """
+    store = a_store()
+    result = run(a_clean_run(), store=store)
+
+    assert result.outcome == "RESOLVED"
+    assert result.decision is not None
+    entries = ledger(store)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["action_class"] == "ROLLBACK_CONFIG"
+    assert entry["target"] == "inventory-api"
+    assert entry["outcome"] == "APPROVE"
+    assert entry["signature"] == result.decision.signature
+    assert entry["subject"] == result.decision.subject
+    assert entry["belief_ids"] == [], "empty until item 16 builds recall"
+    assert entry["flagged_by"] == []
+
+
+def test_a_held_action_is_not_recorded_as_authorized() -> None:
+    """§6.4 flags what was *authorized*. A hold parks on a human; nothing was authorized."""
+    store = a_store(standing="DEGRADED")
+
+    result = run(a_clean_run()[:3], store=store)
+
+    assert result.outcome == "HELD"
+    assert ledger(store) == []
+
+
+def test_a_denied_action_is_not_recorded_either() -> None:
+    store = a_store(standing="SUSPENDED")
+
+    result = run(a_clean_run()[:3], store=store)
+
+    assert result.outcome == "DENIED"
+    assert ledger(store) == []
+
+
+def test_an_unwritable_ledger_escalates_rather_than_executing() -> None:
+    """§7.3 fail-closed: an authorization nothing recorded is one no retraction can flag.
+
+    The alternative is an action that executed while §6.4's promise quietly stopped applying
+    to it, which is the failure this item exists to remove rather than to relocate.
+    """
+
+    class _LedgerFails(FakeFirestore):
+        def collection(self, name: str) -> Any:
+            if name == audit.COLLECTION:
+                raise ServiceUnavailable("firestore is down")
+            return super().collection(name)
+
+    store = a_store()
+    broken = _LedgerFails(store.docs)
+    broken.collections = store.collections
+
+    result = run(a_clean_run(), store=broken)
+
+    assert result.outcome == "ESCALATED"
+    assert result.execution is None, "nothing may execute on an unrecorded authorization"
+    assert result.verification is None
+    assert store.collections["services"]["inventory-api"]["error_rate"] == 0.38, "no rollback"

@@ -71,7 +71,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import firestore, trace_v1
 from opentelemetry import trace
 
-from provenance import action, beliefs, gateway, incident, policy, telemetry
+from provenance import action, audit, beliefs, gateway, incident, policy, telemetry
 from provenance.synthetic import company
 
 TARGET = "inventory-api"
@@ -135,7 +135,8 @@ def restore(client: firestore.Client) -> None:
     retracting a belief (§6.4), and only one of them belongs in the product.
 
     Item 12 widened the belief half from one document to a chain: the version subcollection,
-    the `evidence/{id}` documents those versions cite, and the root document.
+    the `evidence/{id}` documents those versions cite, and the root document. Item 15 added the
+    authorization ledger, so an approved rollback now leaves a record behind as well.
     """
     service = company.service(TARGET)
     client.collection("services").document(TARGET).update(
@@ -147,6 +148,7 @@ def restore(client: firestore.Client) -> None:
     )
     client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
     delete_belief(client)
+    delete_authorizations(client)
 
 
 def delete_belief(client: firestore.Client) -> None:
@@ -161,6 +163,25 @@ def delete_belief(client: firestore.Client) -> None:
             client.collection(beliefs.EVIDENCE_COLLECTION).document(evidence_id).delete()
         snapshot.reference.delete()
     client.collection(beliefs.COLLECTION).document(BELIEF_ID).delete()
+
+
+def authorizations_for_target(client: firestore.Client) -> list[Any]:
+    """Every ledger record this target has, however many runs wrote them (item 15).
+
+    Queried by target rather than by id because the id is derived from the decision signature
+    and the gateway's signing key is per process -- so a run cannot reconstruct the id of a
+    record the *deployed* service wrote, and that half of this script needs cleaning up too.
+    """
+    return list(
+        client.collection(audit.COLLECTION)
+        .where(filter=firestore.FieldFilter("target", "==", TARGET))
+        .stream()
+    )
+
+
+def delete_authorizations(client: firestore.Client) -> None:
+    for snapshot in authorizations_for_target(client):
+        snapshot.reference.delete()
 
 
 def refuse_if_dirty(client: firestore.Client) -> bool:
@@ -187,6 +208,15 @@ def refuse_if_dirty(client: firestore.Client) -> bool:
             f"FAIL: {beliefs.COLLECTION}/{BELIEF_ID} already exists. This run would supersede\n"
             "      it, and its restore would then delete that whole chain.\n"
             "      Remove it deliberately, then re-run.",
+            file=sys.stderr,
+        )
+        return True
+    existing = authorizations_for_target(client)
+    if existing:
+        print(
+            f"FAIL: {audit.COLLECTION} already holds {len(existing)} record(s) for {TARGET}.\n"
+            "      This run's restore deletes every one of them, so somebody else's audit\n"
+            "      trail would go with it. Remove them deliberately, then re-run.",
             file=sys.stderr,
         )
         return True

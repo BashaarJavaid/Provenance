@@ -28,7 +28,7 @@ from google.api_core.exceptions import ServiceUnavailable
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from test_registry import FakeFirestore
 
-from provenance import beliefs, policy, registry, telemetry
+from provenance import audit, beliefs, policy, registry, telemetry
 
 _EXPORTER = attach_exporter()
 
@@ -88,7 +88,9 @@ def a_store(**overrides: Any) -> FakeFirestore:
         rejection_window=(),
     )
     return FakeFirestore(
-        {"sre-infra-agent": registry.to_document(replace(record, **overrides))}, beliefs={}
+        {"sre-infra-agent": registry.to_document(replace(record, **overrides))},
+        beliefs={},
+        authorizations={},
     )
 
 
@@ -109,6 +111,41 @@ def commit(
             client=store,
         )
     )
+
+
+def retract(
+    store: FakeFirestore,
+    evidence: list[policy.Evidence] | None = None,
+    now: datetime = NOW,
+) -> Any:
+    return asyncio.run(
+        policy.retract(
+            entity=ENTITY,
+            domain=DOMAIN,
+            evidence=evidence if evidence is not None else [an_evidence()],
+            agent_id="sre-infra-agent",
+            now=now,
+            client=store,
+        )
+    )
+
+
+def an_authorization(store: FakeFirestore, *, signature: str, belief_ids: tuple[str, ...]) -> str:
+    """One ledger record, as `incident.py`'s authorize node writes it (item 15)."""
+    entry = asyncio.run(
+        audit.record(
+            agent_id="remediation-planner",
+            action_class="ROLLBACK_CONFIG",
+            target=ENTITY,
+            outcome="APPROVE",
+            subject=f"remediation-planner@v3|ROLLBACK_CONFIG|{ENTITY}",
+            signature=signature,
+            belief_ids=belief_ids,
+            now=NOW,
+            client=store,
+        )
+    )
+    return entry.id
 
 
 def window(store: FakeFirestore) -> list[dict[str, Any]]:
@@ -650,3 +687,268 @@ def test_a_tampered_commit_does_not_verify(spans: InMemorySpanExporter) -> None:
     forged = replace(result, outcome="RETRACT")
     with pytest.raises(policy.CommitInvalid):
         policy.verify_commit(forged, policy.public_key_pem())
+
+
+# --- §6.4's retraction (item 15) --------------------------------------------------------------
+
+
+def test_a_retraction_writes_a_retracted_version_and_leaves_its_predecessor_intact(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§6.4: "produces a `RETRACTED` version with a link to the disproving evidence".
+
+    A retraction is a transition and a status at once: the outcome on the wire is `RETRACT`,
+    and what lands in the store is an ordinary superseding version whose status is `RETRACTED`.
+    The belief it withdraws is not deleted or rewritten — that is the whole difference between
+    retracting a belief and pretending it was never held.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+
+    withdrawn = retract(
+        store, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT
+    )
+
+    assert (withdrawn.outcome, withdrawn.reason) == ("RETRACT", "ABOVE_THRESHOLD")
+    stored = store.collections[VERSIONS]["2"]
+    assert stored["status"] == policy.RETRACTED
+    assert stored["supersedes"] == 1
+    assert stored["evidence"] == ["ev-118", "ev-140"], "nothing subtracts (ADR-017, ADR-018)"
+    assert store.collections[VERSIONS]["1"]["status"] == STATUS, "v1 is the reasoning trail"
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.decision.outcome"] == "RETRACT"
+
+
+def test_a_retraction_is_measured_on_the_disproving_evidence_alone() -> None:
+    """§6.4's door is 0.50 over the case *against* the belief — not over the accumulated set.
+
+    Over the accumulated set any threshold would be free: that set has already cleared one.
+    One fresh `verified_system_observation` is exactly 0.60, which is what makes §6.4's "at
+    least as strong" bullet reachable by a single item, as it is written to be.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+
+    withdrawn = retract(
+        store, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT
+    )
+
+    assert withdrawn.confidence == pytest.approx(0.60), "the disproving item alone, undecayed"
+    assert store.collections[VERSIONS]["2"]["threshold"] == pytest.approx(0.50)
+
+
+def test_a_weaker_source_class_cannot_retract(spans: InMemorySpanExporter) -> None:
+    """ARCHITECTURE §10's retraction row, the refusal half.
+
+    `agent_inference` is 0.15 against a belief established by `contractual_record` at 0.50, so
+    it fails §6.4's class test — and it fails the number too, which is the point of putting the
+    door at 0.50: a poisoner is stopped by both rules rather than one.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+
+    refused = retract(store, [a_fortnight_later("agent_inference", "ev-140")], FORTNIGHT)
+
+    assert refused.outcome == "REJECT"
+    assert refused.reason in ("BELOW_THRESHOLD", "RETRACTION_UNSUPPORTED")
+    assert "2" not in store.collections[VERSIONS], "a refused retraction wrote a version"
+
+
+def test_a_strong_enough_number_still_fails_the_class_test() -> None:
+    """The two rules are separate, and this is the case that proves the class test is live.
+
+    `third_party_audit` is 0.55 — over the 0.50 door, so the number does not stop it — but the
+    belief in force rests on a `verified_system_observation` at 0.60. §6.4 asks for a class at
+    least as strong as the one that established the belief, and 0.55 is not.
+    """
+    store = a_store()
+    commit(store)  # established by verified_system_observation, 0.60
+
+    refused = retract(store, [a_fortnight_later("third_party_audit", "ev-140")], FORTNIGHT)
+
+    assert (refused.outcome, refused.reason) == ("REJECT", "RETRACTION_UNSUPPORTED")
+    assert refused.confidence > policy.NEW_BELIEF_THRESHOLD, "the number was never the obstacle"
+    assert "2" not in store.collections[VERSIONS]
+
+
+def test_the_same_source_class_may_retract_its_own_belief() -> None:
+    """§6.4 permits exactly what §6.3 forbids, and §6.3 hands this case over deliberately.
+
+    "A single sensor cannot both set and clear an alarm" is §6.3's rule for a *flip*. A sensor
+    reporting that what it previously reported was wrong is the case §6.4 exists for, so the
+    different-class rule must not apply here — if it did, a belief could only ever be retracted
+    by something that had never observed it.
+    """
+    store = a_store()
+    commit(store)
+
+    withdrawn = retract(
+        store, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT
+    )
+
+    assert (withdrawn.outcome, withdrawn.reason) == ("RETRACT", "ABOVE_THRESHOLD")
+
+
+def test_a_belief_cannot_be_retracted_by_its_own_evidence() -> None:
+    """Stage 3 applies unchanged. Re-citing what established a belief is not a case against it."""
+    store = a_store()
+    commit(store)
+
+    refused = retract(store, [an_evidence()], LATER)
+
+    assert (refused.outcome, refused.reason) == ("REJECT", "NO_NEW_EVIDENCE")
+    assert "2" not in store.collections[VERSIONS]
+
+
+def test_retracting_a_belief_that_does_not_exist_is_refused() -> None:
+    store = a_store()
+
+    refused = retract(store)
+
+    assert (refused.outcome, refused.reason) == ("REJECT", "NOTHING_TO_RETRACT")
+    assert VERSIONS not in store.collections, "nothing was written, not even a collection"
+
+
+def test_retracting_an_already_retracted_belief_is_refused() -> None:
+    store = a_store()
+    commit(store)
+    retract(store, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT)
+
+    again = retract(
+        store,
+        [
+            a_fortnight_later(
+                "verified_system_observation", "ev-141", at=FORTNIGHT + timedelta(days=1)
+            )
+        ],
+        FORTNIGHT + timedelta(days=1),
+    )
+
+    assert (again.outcome, again.reason) == ("REJECT", "NOTHING_TO_RETRACT")
+    assert "3" not in store.collections[VERSIONS]
+
+
+def test_a_retraction_the_agent_caused_costs_it_standing_but_an_empty_one_does_not() -> None:
+    """§3.4 counts refusals "lacking verifiable evidence" — a claim, not a bookkeeping error."""
+    store = a_store()
+    commit(store)
+    retract(store, [a_fortnight_later("third_party_audit", "ev-140")], FORTNIGHT)
+    assert [entry["reason"] for entry in window(store)] == ["RETRACTION_UNSUPPORTED"]
+
+    other = FakeFirestore(
+        {"sre-infra-agent": store.docs["sre-infra-agent"]}, beliefs={}, authorizations={}
+    )
+    other.collections["agents"] = other.docs
+    asyncio.run(
+        policy.retract(
+            entity="never-heard-of-it",
+            domain=DOMAIN,
+            evidence=[an_evidence()],
+            agent_id="sre-infra-agent",
+            now=NOW,
+            client=other,
+        )
+    )
+
+    assert [entry["reason"] for entry in window(other)] == ["RETRACTION_UNSUPPORTED"], (
+        "NOTHING_TO_RETRACT is about the store's state, not the agent's evidence"
+    )
+
+
+# --- §6.4's third bullet: the audit ledger ------------------------------------------------------
+
+
+def test_a_retraction_flags_every_action_that_rested_on_the_belief() -> None:
+    """ARCHITECTURE §10's retraction row, end to end and offline.
+
+    Two authorized actions, one of which rested on this belief. The retraction marks that one
+    for review and leaves the other alone — "every action authorized on it" is a much narrower
+    claim than "every action", and the control record is what keeps it narrow.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+    ours = an_authorization(store, signature="ecdsa:aaaa", belief_ids=(BELIEF_ID,))
+    theirs = an_authorization(store, signature="ecdsa:bbbb", belief_ids=("belief-pricing-api",))
+
+    retract(store, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT)
+
+    ledger = store.collections["authorizations"]
+    assert ledger[ours]["flagged_by"] == [
+        {
+            "belief_id": BELIEF_ID,
+            "version": 1,
+            "flagged_at": FORTNIGHT.strftime(audit.TIMESTAMP),
+        }
+    ], "the action that rested on the retracted belief is flagged for review"
+    assert ledger[theirs]["flagged_by"] == [], "an unrelated action must never be flagged"
+
+
+def test_a_refused_retraction_flags_nothing() -> None:
+    """The flag is a consequence of retracting, not of proposing to."""
+    store = a_store()
+    commit(store)
+    ours = an_authorization(store, signature="ecdsa:aaaa", belief_ids=(BELIEF_ID,))
+
+    refused = retract(store, [a_fortnight_later("third_party_audit", "ev-140")], FORTNIGHT)
+
+    assert refused.outcome == "REJECT"
+    assert store.collections["authorizations"][ours]["flagged_by"] == []
+
+
+def test_a_ledger_that_cannot_be_flagged_refuses_the_retraction() -> None:
+    """§7.3 fail-closed, and the reason the flag is written before the version.
+
+    A retraction whose actions were never flagged is a decision resting on a wrong thing that
+    nobody knows about — the exact failure §6.4 exists to prevent. So an unwritable ledger is a
+    refusal with no version appended, never a quiet success.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+    an_authorization(store, signature="ecdsa:aaaa", belief_ids=(BELIEF_ID,))
+
+    class _FlagFails(FakeFirestore):
+        def collection(self, name: str) -> Any:
+            if name == audit.COLLECTION:
+                raise ServiceUnavailable("firestore is down")
+            return super().collection(name)
+
+    broken = _FlagFails(store.docs)
+    broken.collections = store.collections  # every collection but the ledger works as before
+
+    refused = retract(
+        broken, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT
+    )
+
+    assert (refused.outcome, refused.reason) == ("REJECT", "STORE_UNAVAILABLE")
+    assert "2" not in store.collections[VERSIONS], "the version was appended anyway"
+
+
+def test_a_retracted_belief_can_be_re_asserted_only_as_an_ordinary_flip() -> None:
+    """Retraction is not terminal, and re-asserting is not free.
+
+    The chain is only ever extended, so a version after a `RETRACTED` one faces §6.3's flip
+    rules against everything the belief has ever rested on: 0.70 and a class the accumulated
+    set does not carry. Repeating the class that retracted it is refused.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+    retract(store, [a_fortnight_later("verified_system_observation", "ev-140")], FORTNIGHT)
+
+    later = FORTNIGHT + timedelta(hours=1)
+    repeat = commit(
+        store,
+        [a_fortnight_later("verified_system_observation", "ev-141", at=later)],
+        status=STATUS,
+        now=later,
+    )
+    assert (repeat.outcome, repeat.reason) == ("REJECT", "FLIP_UNSUPPORTED")
+
+    fresh = commit(
+        store,
+        [a_fortnight_later("third_party_audit", "ev-142", at=later)],
+        status=STATUS,
+        now=later,
+    )
+    assert (fresh.outcome, fresh.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert store.collections[VERSIONS]["3"]["status"] == STATUS
