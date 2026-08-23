@@ -21,7 +21,15 @@ which is item 11's whole `verify:` line, and a read spends nothing -- which is t
 reason `/trigger` is guarded and this is not. What makes it safe to serve is §8.1's
 redaction rule: span attributes carry identifiers, hashes, enums and numbers, never content,
 and `tests/test_telemetry_schema.py` walks every shape enforcing it. `THREAT_MODEL.md`
-records what that publishes. No route here reads Firestore directly.
+records what that publishes.
+
+`GET /belief/{entity}` arrived with item 17 and is the **first route here that reads
+Firestore**, which is a real departure and not a convenience. §8.2's belief inspector renders
+evidence, the arithmetic behind a computed confidence, a supersession chain and a decay
+clock -- all of it *content*, and §8.1 keeps content off spans on purpose, so the one stream
+structurally cannot serve it. It is unauthenticated for the same reason `/trace` is: a read
+spends nothing. `docs/adr/ADR-021` records the departure; `THREAT_MODEL.md` records what it
+publishes.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -39,7 +48,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from provenance import incident, telemetry
+from provenance import beliefs, incident, policy, telemetry
 from provenance.telemetry import TriggerSignal
 
 TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
@@ -79,6 +88,56 @@ async def shell() -> FileResponse:
 async def spans() -> list[dict[str, Any]]:
     """The one stream, live (item 11). Unauthenticated on purpose -- see the module docstring."""
     return telemetry.BUFFER.snapshot()
+
+
+@app.get("/belief/{entity}")
+async def belief(entity: str) -> dict[str, Any]:
+    """§8.2's belief inspector, read side (item 17). Unauthenticated, like `/trace`.
+
+    Serves the whole chain rather than the version in force: §3.2's history block is a *view*
+    over versions that already exist, and `beliefs.history()` is the read that produces it,
+    `superseded_by` derived rather than stored. The evidence every version cites comes back
+    beside it, keyed by id, because a citation the caller cannot resolve is a belief that
+    cannot show its work.
+
+    `current.breakdown` is §4.3 recomputed **as of now** against the stored number committed
+    at `committed_at`; the two disagree by exactly the decay between them, and that gap is
+    the decay clock doing something rather than being a date on a document. Both are served
+    so neither has to be inferred. The arithmetic comes from `policy.contributions()` and
+    from nowhere else.
+    """
+    belief_id = beliefs.belief_id_for(entity)
+    try:
+        versions = await beliefs.history(belief_id)
+        cited = {item_id for version in versions for item_id in version.evidence_ids}
+        evidence = await beliefs.read_evidence(sorted(cited))
+    except beliefs.BeliefNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # §7.3: "the store was unreadable" and "the organization believes nothing" must not look
+    # alike. A 404 here would tell a caller this entity has no beliefs, which is a claim the
+    # service is in no position to make while it cannot read the store.
+    except beliefs.BeliefStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    in_force = versions[-1]
+    now = datetime.now(UTC)
+    by_id = {item.id: item for item in evidence}
+    return {
+        "belief_id": belief_id,
+        "entity": in_force.entity,
+        "domain": in_force.domain,
+        "scope": in_force.scope,
+        "versions": [asdict(version) for version in versions],
+        "evidence": {item.id: asdict(item) for item in evidence},
+        "current": {
+            "version": in_force.version,
+            "as_of": now.strftime(beliefs.TIMESTAMP),
+            "confidence_now": policy.confidence([by_id[i] for i in in_force.evidence_ids], now=now),
+            "breakdown": [
+                asdict(row)
+                for row in policy.contributions([by_id[i] for i in in_force.evidence_ids], now=now)
+            ],
+        },
+    }
 
 
 class TriggerRequest(BaseModel):

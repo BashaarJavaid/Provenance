@@ -247,21 +247,53 @@ def _parse(timestamp: str) -> datetime:
     return datetime.strptime(timestamp, TIMESTAMP).replace(tzinfo=UTC)
 
 
-def confidence(evidence: Sequence[Evidence], *, now: datetime) -> float:
-    """§4.3's noisy-OR: `1 − Π(1 − w_i)` over the **distinct source classes** present.
+@dataclass(frozen=True)
+class Contribution:
+    """One source class's term in §4.3's product, with the arithmetic that produced it.
 
-    Distinctness is what makes corroboration mean something: restating one observation five
-    times leaves the product unchanged, so an agent cannot talk a belief over the threshold.
-    The strongest (least decayed) item of each class is the one that counts.
+    Item 17's belief inspector renders these rows, and that is the whole reason they are a
+    typed object rather than a formatting concern in the route or in the browser. §4.3 is a
+    published formula; a second implementation of it — anywhere — is a number that can
+    disagree with the one the Policy Engine decided with. `confidence()` is defined in terms
+    of this function, so there is exactly one.
     """
-    strongest: dict[SourceClass, float] = {}
+
+    source_class: SourceClass
+    base: float
+    age_days: float
+    weight: float
+
+
+def contributions(evidence: Sequence[Evidence], *, now: datetime) -> tuple[Contribution, ...]:
+    """§4.3's per-class weights: `w = base_weight × 2^(-age / half_life)`.
+
+    One row per **distinct source class**, not one per item — the strongest (least decayed)
+    item of each class is the one that counts, which is what makes corroboration mean
+    something: restating one observation five times leaves the product unchanged, so an agent
+    cannot talk a belief over the threshold. Ordered by descending weight, because that is
+    the order the arithmetic reads in.
+    """
+    strongest: dict[SourceClass, Contribution] = {}
     for item in evidence:
         age_days = max(0.0, (now - _parse(item.observed_at)).total_seconds() / 86400)
-        weight = BASE_WEIGHT[item.source_class] * 2 ** (-age_days / HALF_LIFE_DAYS)
-        strongest[item.source_class] = max(strongest.get(item.source_class, 0.0), weight)
+        base = BASE_WEIGHT[item.source_class]
+        row = Contribution(
+            source_class=item.source_class,
+            base=base,
+            age_days=age_days,
+            weight=base * 2 ** (-age_days / HALF_LIFE_DAYS),
+        )
+        held = strongest.get(item.source_class)
+        if held is None or row.weight > held.weight:
+            strongest[item.source_class] = row
+    return tuple(sorted(strongest.values(), key=lambda c: -c.weight))
+
+
+def confidence(evidence: Sequence[Evidence], *, now: datetime) -> float:
+    """§4.3's noisy-OR: `1 − Π(1 − w_i)` over the **distinct source classes** present."""
     product = 1.0
-    for weight in strongest.values():
-        product *= 1 - weight
+    for row in contributions(evidence, now=now):
+        product *= 1 - row.weight
     return 1 - product
 
 
