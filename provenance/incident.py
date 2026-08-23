@@ -97,8 +97,9 @@ VERIFICATION_ID = "verification-agent"
 VERIFICATION_VERSION = "v1"
 
 # The domain-typed status a confirmed rollback teaches (§3.2: "domain-typed; UNKNOWN and
-# RETRACTED are universal"). A constant while the stub Policy Engine is the only writer --
-# item 14's Memory Analyst is what proposes a status, and this line is what it replaces.
+# RETRACTED are universal"). A constant because the control loop already knows this status
+# deterministically -- a confirmed rollback teaches exactly one thing. Item 23's Memory Analyst
+# is what first proposes a status a model had to derive, and this line is what it replaces.
 BELIEF_STATUS = "CONFIG_REGRESSION_PRONE"
 
 _APP = "provenance"

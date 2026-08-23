@@ -1,10 +1,10 @@
 """The Memory Policy Engine: the computed number, the refusals, and the superseding write.
 
-`ARCHITECTURE.md` §10's confidence and novelty rows are item 13's and §6.3's conflict rule is
-item 14's. What is checked here is only what the engine claims: §4.3's arithmetic over the
-accumulated evidence, the §2.2 stage-2 standing and domain checks, stage 3's mechanical
-novelty check, the threshold, the re-affirmation that supersedes v1 (item 12), and the status
-flip it refuses until the rule governing one exists.
+`ARCHITECTURE.md` §10's confidence and novelty rows are item 13's; its Conflict-rule and
+Standing rows are item 14's and live here too. What is checked is what the engine claims:
+§4.3's arithmetic over the accumulated evidence, the §2.2 stage-2 standing and domain checks,
+stage 3's mechanical novelty check, both thresholds, the re-affirmation that supersedes v1
+(item 12), §6.3's different-source-class rule, and the standing counter stage 6 increments.
 
 The confidence and novelty tests are the ones that would matter if every other guarantee
 held, and they defend the same property from two sides. If restating one observation twice
@@ -96,6 +96,7 @@ def commit(
     store: FakeFirestore,
     evidence: list[policy.Evidence] | None = None,
     status: str = STATUS,
+    now: datetime = NOW,
 ) -> Any:
     return asyncio.run(
         policy.commit(
@@ -104,10 +105,17 @@ def commit(
             status=status,
             evidence=evidence if evidence is not None else [an_evidence()],
             agent_id="sre-infra-agent",
-            now=NOW,
+            now=now,
             client=store,
         )
     )
+
+
+def window(store: FakeFirestore) -> list[dict[str, Any]]:
+    """§3.4's `rejection_window` as it is actually stored — the standing counter (§2.2 #6)."""
+    stored = store.docs["sre-infra-agent"]["rejection_window"]
+    assert isinstance(stored, list)
+    return stored
 
 
 # --- §4.3, the computed number --------------------------------------------------------------
@@ -250,27 +258,256 @@ def test_a_re_affirmation_commits_a_superseding_version(spans: InMemorySpanExpor
     assert span.attributes["provenance.belief.supersedes"] == 1
 
 
-def test_a_status_flip_is_refused_until_the_conflict_rule_exists(
+# --- §6.3's conflict rule (item 14) ----------------------------------------------------------
+
+FORTNIGHT = NOW + timedelta(days=15)
+CLEARED = "CLEARED"
+
+
+def a_flagging_evidence(**overrides: Any) -> policy.Evidence:
+    """§6.3's Aug-1 `contractual_record` — the class that establishes the status in force."""
+    return an_evidence(id="ev-118", source_class="contractual_record", **overrides)
+
+
+def a_fortnight_later(source_class: str, item_id: str, at: datetime = FORTNIGHT) -> policy.Evidence:
+    stamp = at.strftime(policy.TIMESTAMP)
+    return an_evidence(
+        id=item_id,
+        source_class=source_class,
+        source_id=f"firestore:{source_class}/{ENTITY}",
+        observed_at=stamp,
+        ingested_at=stamp,
+    )
+
+
+def test_a_flip_below_the_flip_threshold_is_refused_by_the_number(
     spans: InMemorySpanExporter,
 ) -> None:
-    """§4.3 puts a flip behind 0.70 *plus* §6.3's different-source-class rule (item 14).
+    """§4.3's two doors, and the refusal says which one it was.
 
-    Letting one through the 0.50 new-belief door in the meantime would mean a single sensor
-    could set and clear its own alarm — the exact thing §6.3 exists to prevent. The refusal
-    still carries the arithmetic, so the trace shows what was proposed and why it stopped.
+    A re-affirmation at 0.60 commits; the same evidence claiming the opposite status does not,
+    because a flip is judged against 0.70. `BELOW_THRESHOLD` carrying `threshold = 0.70` is the
+    honest report — the claim was not refused for lacking corroboration, it was refused for
+    not being confident enough to be worth checking corroboration for.
     """
     store = a_store()
     commit(store)
 
-    flip = commit(store, [a_later_evidence()], status="HEALTHY")
+    flip = commit(store, [a_later_evidence()], status="HEALTHY", now=LATER)
 
-    assert (flip.outcome, flip.reason) == ("REJECT", "FLIP_UNSUPPORTED")
+    assert (flip.outcome, flip.reason) == ("REJECT", "BELOW_THRESHOLD")
     assert flip.confidence == pytest.approx(0.60)
     assert flip.version == 2
     assert "2" not in store.collections[VERSIONS]
     span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
     assert span.attributes is not None
+    assert span.attributes["provenance.belief.threshold"] == pytest.approx(0.70)
     assert span.attributes["provenance.belief.supersedes"] == 1
+
+
+def test_a_same_source_class_flip_is_refused_even_above_the_threshold(
+    spans: InMemorySpanExporter,
+) -> None:
+    """ROADMAP item 14's verify line, first half; ARCHITECTURE §10's Conflict-rule row.
+
+    "A single sensor cannot both set and clear an alarm." The belief in force here rests on two
+    classes and clears 0.70 comfortably, so the number is not what stops this — the proposal
+    adds a *third* reading from a class already in the set, which is corroboration by
+    repetition and §6.3 says that is not corroboration at all.
+
+    Note that one class alone can never reach 0.70: the strongest base weight is 0.60 and
+    `confidence()` collapses a class to its best item. So this case only exists because a
+    version rests on everything it ever rested on (item 13) — which is exactly why the classes
+    are read off the accumulated set rather than off the proposal.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+    corroborated = commit(
+        store,
+        [a_fortnight_later("verified_system_observation", "ev-140")],
+        now=FORTNIGHT,
+    )
+    assert corroborated.outcome == "COMMIT"
+
+    flip = commit(
+        store,
+        [
+            a_fortnight_later(
+                "verified_system_observation", "ev-141", at=FORTNIGHT + timedelta(hours=1)
+            )
+        ],
+        status=CLEARED,
+        now=FORTNIGHT + timedelta(hours=1),
+    )
+
+    assert (flip.outcome, flip.reason) == ("REJECT", "FLIP_UNSUPPORTED")
+    assert flip.confidence > policy.FLIP_THRESHOLD, "the number was never the obstacle"
+    assert "3" not in store.collections[VERSIONS], "a same-class flip wrote a version"
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.belief.status"] == CLEARED, "what was claimed"
+    assert store.collections[VERSIONS]["2"]["status"] == STATUS, "what is still in force"
+
+
+def test_a_different_source_class_flip_commits(spans: InMemorySpanExporter) -> None:
+    """ROADMAP item 14's verify line, second half — §6.3's *legitimate update*, verbatim.
+
+    "Supplier X flagged Aug 1 on late shipments (`contractual_record`). Aug 15 it passes a
+    compliance audit (`third_party_audit` — new, verifiable, different class). Confidence
+    recomputes, threshold met → commit superseding version." That is 0.71 over the accumulated
+    pair and 0.55 over the audit alone, which is the whole reason item 13 accumulates.
+    """
+    store = a_store()
+    commit(store, [a_flagging_evidence()])
+
+    flip = commit(
+        store,
+        [a_fortnight_later("third_party_audit", "ev-140")],
+        status=CLEARED,
+        now=FORTNIGHT,
+    )
+
+    assert (flip.outcome, flip.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert flip.confidence == pytest.approx(0.71, abs=0.005)
+    stored = store.collections[VERSIONS]["2"]
+    assert stored["status"] == CLEARED
+    assert stored["threshold"] == pytest.approx(0.70), "the door it actually passed through"
+    assert stored["evidence"] == ["ev-118", "ev-140"], "it rests on what it overturned, too"
+    assert stored["supersedes"] == 1
+    assert store.collections[VERSIONS]["1"]["status"] == STATUS, "v1 is the reasoning trail"
+
+
+def test_a_first_belief_is_never_a_flip(spans: InMemorySpanExporter) -> None:
+    """There is nothing to contradict, so 0.50 is the door — a status is not a flip by itself.
+
+    Guarding the `previous is not None` half of the rule: without it, the very first belief
+    about an entity would be judged against 0.70 and refused for lacking corroboration of a
+    status nothing had ever claimed.
+    """
+    store = a_store()
+
+    first = commit(store, status="ANY_STATUS_AT_ALL")
+
+    assert (first.outcome, first.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert store.collections[VERSIONS]["1"]["threshold"] == pytest.approx(0.50)
+
+
+# --- §2.2 stage 6's standing counter (item 14) -----------------------------------------------
+
+
+def test_a_refusal_the_agent_caused_increments_its_standing_counter() -> None:
+    """§2.2 stage 6: "REJECT (logged, standing counter incremented)".
+
+    §6.3's poisoning case is this line and nothing else: an unverifiable claim weighs 0.00,
+    the number does not move, the write is refused — and the attempt is remembered against the
+    agent that made it. The reason is stored so item 28's panel can say *why* it degraded.
+    """
+    store = a_store()
+
+    refused = commit(store, [an_evidence(source_class="unverified_external_claim")])
+
+    assert (refused.outcome, refused.reason) == ("REJECT", "BELOW_THRESHOLD")
+    assert refused.confidence == 0.0
+    assert [entry["reason"] for entry in window(store)] == ["BELOW_THRESHOLD"]
+    assert store.docs["sre-infra-agent"]["standing"] == "GOOD", "one attempt is not three"
+
+
+def test_an_infrastructure_refusal_does_not_count_against_the_agent() -> None:
+    """§3.4 counts "rejected memory writes **lacking verifiable evidence**", not every REJECT.
+
+    An unreadable evidence store is not the proposing agent's doing, and standing has no
+    automatic restoration path — so degrading an agent for a Firestore outage would be a
+    permanent penalty for someone else's failure.
+    """
+    store = a_store()
+    commit(store)
+    store.collections[beliefs.EVIDENCE_COLLECTION].clear()
+
+    unreadable = commit(store, [a_later_evidence()])
+
+    assert (unreadable.outcome, unreadable.reason) == ("REJECT", "STORE_UNAVAILABLE")
+    assert window(store) == [], "an outage degraded an agent"
+
+
+def test_three_refusals_degrade_the_agent_and_its_next_write_is_rejected_outright() -> None:
+    """ARCHITECTURE §10's Standing row, and the mechanism item 28's demo beat renders.
+
+    Three rejected writes inside the window → DEGRADED, and §3.4's consequence follows on the
+    next proposal: "a DEGRADED agent's memory writes are rejected outright". The fourth claim
+    here would otherwise have committed — it is refused for who is asking, not for what it says.
+    """
+    store = a_store()
+    bare = an_evidence(source_class="unverified_external_claim")
+
+    for hour in range(3):
+        stamp = (NOW + timedelta(hours=hour)).strftime(policy.TIMESTAMP)
+        refused = commit(
+            store,
+            [an_evidence(id=f"ev-bare-{hour}", observed_at=stamp, source_class=bare.source_class)],
+            now=NOW + timedelta(hours=hour),
+        )
+        assert refused.reason == "BELOW_THRESHOLD"
+
+    assert len(window(store)) == 3
+    assert store.docs["sre-infra-agent"]["standing"] == "DEGRADED"
+
+    ordinary = commit(store, [a_later_evidence()], now=LATER)
+
+    assert (ordinary.outcome, ordinary.reason) == ("REJECT", "STANDING_NOT_GOOD")
+    assert len(window(store)) == 3, "an already-refused authority is not a fourth rejection"
+
+
+def test_a_registry_that_cannot_record_the_rejection_does_not_change_the_answer() -> None:
+    """The counter write is best-effort; the refusal is not.
+
+    Nothing was committed either way, so a registry that cannot be written costs a missed
+    increment. Raising instead would turn a correct refusal into an exception out of the
+    incident's resolve node — a fail-closed decision reported as a crash.
+    """
+    store = a_store()
+
+    class OneShot(FakeFirestore):
+        def collection(self, name: str) -> Any:
+            if name == registry.COLLECTION and self.docs["sre-infra-agent"].get("_read"):
+                self.error = ServiceUnavailable("firestore is down")
+            self.docs["sre-infra-agent"]["_read"] = True
+            return super().collection(name)
+
+    failing = OneShot(dict(store.docs), beliefs={})
+
+    refused = commit(failing, [an_evidence(source_class="unverified_external_claim")])
+
+    assert (refused.outcome, refused.reason) == ("REJECT", "BELOW_THRESHOLD")
+    policy.verify_commit(refused, policy.public_key_pem())
+
+
+def test_the_span_carries_the_standing_that_governed_the_decision(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§8.1: the span reports what this decision was made under, not what it caused.
+
+    The agent was GOOD when the proposal was evaluated, and the degradation is a consequence
+    of the refusal, not an input to it. DEGRADED becoming visible is the registry panel's job.
+    """
+    store = a_store()
+    for hour in range(3):
+        stamp = (NOW + timedelta(hours=hour)).strftime(policy.TIMESTAMP)
+        commit(
+            store,
+            [
+                an_evidence(
+                    id=f"ev-bare-{hour}",
+                    observed_at=stamp,
+                    source_class="unverified_external_claim",
+                )
+            ],
+            now=NOW + timedelta(hours=hour),
+        )
+
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.agent.standing"] == "GOOD"
+    assert store.docs["sre-infra-agent"]["standing"] == "DEGRADED"
 
 
 def test_restating_one_source_is_not_a_second_reason_to_believe_it(

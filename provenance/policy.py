@@ -1,4 +1,4 @@
-"""The Memory Policy Engine — §2.2's pipeline (items 10 and 12).
+"""The Memory Policy Engine — §2.2's pipeline, complete but for RETRACT (items 10, 12–14).
 
 The mirror of the gateway: probabilistic recommends, deterministic decides, for beliefs as
 for actions (§1.1 property 2). Nothing here reasons. It reads standing, computes a number
@@ -7,8 +7,8 @@ from a published formula, compares it to a threshold, signs, and writes — or r
 Item 10 shipped this as a stub that could commit exactly one version and refused a second.
 Item 12 gave it the versioned store (`beliefs.py`), so a re-affirmation now commits a real
 superseding version and `SUPERSESSION_UNSUPPORTED` is gone rather than merely unused. Item 13
-wired stage 3 and widened stage 4 to the accumulated evidence set (`docs/adr/ADR-017`). What
-runs today:
+wired stage 3 and widened stage 4 to the accumulated evidence set (`docs/adr/ADR-017`). Item 14
+opened the flip door and wired stage 6's counter (`docs/adr/ADR-018`). What runs today:
 
 | §2.2 stage | Here |
 |---|---|
@@ -16,26 +16,33 @@ runs today:
 | 2. registry read, request-time | `registry.get_agent()`, standing GOOD **and** domain held |
 | 3. novelty check | `beliefs.novel()` over `(source_id, observed_at)`; nothing new is a REJECT |
 | 4. computed confidence | `confidence()`, §4.3's noisy-OR over the **accumulated** evidence |
-| 5. threshold + conflict rule | threshold for every version; §6.3's flip rule is item 14's |
-| 6. outcome | COMMIT or REJECT, signed, one `belief.commit` span |
+| 5. threshold + conflict rule | 0.50 for a new belief, 0.70 **plus** §6.3's class rule for a flip |
+| 6. outcome | COMMIT or REJECT, signed, one `belief.commit` span, counter written |
 
-**A status flip is refused, not approximated.** §4.3 puts a flip behind 0.70 *plus* §6.3's
-different-source-class rule, and neither exists until item 14. Letting a flip through the
-0.50 door in the meantime would mean a single sensor could set and clear its own alarm —
-the one thing §6.3 exists to prevent — so a proposal whose status differs from the current
-version is answered `REJECT("FLIP_UNSUPPORTED")`. Same status, new evidence, is a
-re-affirmation: v2 supersedes v1, and v1 is left exactly as it was committed.
+**A status flip is two doors, not one.** §4.3 puts a flip behind 0.70 *and* §6.3 behind at
+least one evidence item of a `source_class` different from the class that established the
+current status — which is read off the classes the current version's evidence carries. Either
+door alone would be weaker than either document: at 0.70 without the class rule, one sensor
+could set and clear its own alarm. The two refusals are told apart by name — below the number
+is `BELOW_THRESHOLD` carrying `threshold = 0.70`, no different class is `FLIP_UNSUPPORTED` —
+because the trace has to say *which* door stopped it. Same status, new evidence, is a
+re-affirmation at the 0.50 door: v2 supersedes v1, and v1 is left exactly as it was committed.
+
+**One source class cannot reach 0.70.** The strongest base weight is 0.60 and `confidence()`
+collapses a class to its best item, so a flip only ever passes the number by resting on the
+accumulated set — which is the case where the class rule is the only thing left standing.
 
 **A version rests on everything it has ever rested on.** §3.2 renders belief #42 citing
 `ev-[118,140,141]` where its predecessor #17 cited `ev-[118]`, so a superseding version
 carries its predecessor's evidence forward and the confidence recomputes over the union.
-Without that, §6.3's legitimate-update case cannot reach the 0.70 door item 14 needs: an
-Aug-1 `contractual_record` plus an Aug-15 `third_party_audit` is 0.71 accumulated and 0.55
-if only the new item counts. Novelty is what keeps the set honest — it can only ever grow by
+Without that, §6.3's legitimate-update case cannot reach the 0.70 door: an Aug-1
+`contractual_record` plus an Aug-15 `third_party_audit` is 0.71 accumulated and 0.55 if only
+the new item counts. Novelty is what keeps the set honest — it can only ever grow by
 observations nobody has made before.
 
-Also still absent by design: the standing-counter write §2.2 stage 6 names (item 14), and
-`RETRACT` (§6.4, item 15).
+Still absent by design: `RETRACT` (§6.4, item 15). A rejected write now increments the
+proposing agent's standing counter — but only the refusals that are statements about its
+evidence, see `COUNTED_REJECTIONS`.
 
 Fail-closed (§7.3): a registry that cannot be read is a REJECT, not a commit; the store's
 write is a `create()` so a concurrent one loses rather than clobbers; and every outcome,
@@ -46,6 +53,7 @@ same reason `gateway.authorize()` returns every terminal outcome as a `Decision`
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -80,9 +88,12 @@ HALF_LIFE_DAYS = 30.0
 # it so that beliefs committed before the Sweeper exists still carry a decay clock.
 ON_EXPIRY = "REVERIFY"
 
-# §4.3: "0.50 for a new belief". The flip threshold (0.70) has no caller until item 14,
-# because a flip is refused outright until the rule that governs it exists.
+# §4.3: "0.50 for a new belief; 0.70 plus the source-class rule in §6.3 for a status flip".
+# Which of the two a proposal is judged against is decided by one thing — whether its status
+# differs from the version in force — and the number it faced is stored on the version and
+# emitted on the span, so a refusal says which door it was.
 NEW_BELIEF_THRESHOLD = 0.50
+FLIP_THRESHOLD = 0.70
 
 # Closed, for the same reason `gateway.DecisionReason` is closed: this lands on a span, and
 # §8.1 admits identifiers, enums and numbers but never prose.
@@ -97,6 +108,17 @@ CommitReason = Literal[
     "VERSION_CONFLICT",
     "STORE_UNAVAILABLE",
 ]
+
+# §2.2 stage 6 increments the standing counter on a REJECT, and §3.4 narrows which ones:
+# "three rejected memory writes **lacking verifiable evidence**". These three are the
+# refusals that are statements about the proposing agent's evidence. The rest are not its
+# fault — an unreadable registry, an unreadable store and a lost `create()` race are
+# infrastructure, and degrading an agent for a Firestore outage would be a bug wearing a
+# security guarantee's clothes. STANDING_NOT_GOOD and DOMAIN_NOT_HELD are already-refused
+# authority; counting them would only re-degrade an agent that is degraded.
+COUNTED_REJECTIONS: frozenset[CommitReason] = frozenset(
+    {"BELOW_THRESHOLD", "FLIP_UNSUPPORTED", "NO_NEW_EVIDENCE"}
+)
 
 
 @dataclass(frozen=True)
@@ -223,6 +245,9 @@ class _Verdict:
     # How many of the proposed items survived stage 3. Defaults to zero so a refusal that
     # happened *before* the novelty check reports the count it actually established: none.
     novel_count: int = 0
+    # The door this proposal was judged against — 0.70 for a flip, 0.50 otherwise. It reaches
+    # both the stored version and the span, so `BELOW_THRESHOLD` says which number it missed.
+    threshold: float = NEW_BELIEF_THRESHOLD
 
 
 async def commit(
@@ -247,6 +272,16 @@ async def commit(
         now=now,
         client=client,
     )
+
+    # §2.2 stage 6, the half that is not the span: a rejection whose cause is the agent's own
+    # evidence increments its standing counter, and the third inside §3.4's window degrades it.
+    if verdict.agent is not None and verdict.reason in COUNTED_REJECTIONS:
+        # ponytail: best-effort. Nothing was committed either way, so a registry that cannot be
+        # written costs a missed increment, not a wrong answer — and raising here would turn a
+        # correct refusal into an exception out of the incident's resolve node.
+        with contextlib.suppress(registry.RegistryError):
+            await registry.record_rejection(verdict.agent, verdict.reason, now=now, client=client)
+
     signed = _sign(belief_id, verdict.version, verdict.outcome, verdict.reason, verdict.confidence)
 
     with telemetry.belief_commit(
@@ -260,7 +295,7 @@ async def commit(
         entity=entity,
         status=status,
         confidence=verdict.confidence,
-        threshold=NEW_BELIEF_THRESHOLD,
+        threshold=verdict.threshold,
         evidence_ids=[item.id for item in evidence],
         source_classes=[item.source_class for item in evidence],
         # What survived stage 3, while `evidence_ids` and `source_classes` above stay as
@@ -351,14 +386,25 @@ async def _decide(
     # fortnight apart, and `confidence()`'s per-class max is what "re-confirmation raises
     # confidence via decay-reset" means in arithmetic.
     conf = confidence((*known, *new), now=now)
-    if conf < NEW_BELIEF_THRESHOLD:
-        return _Verdict("REJECT", "BELOW_THRESHOLD", conf, agent, version, supersedes, len(new))
 
-    # Stage 5's conflict rule, as much of it as exists. A flip needs 0.70 and §6.3's
-    # different-source-class corroboration; item 14 owns both, and until then the honest
-    # answer is a refusal rather than a commit through the new-belief door.
-    if previous is not None and previous.status != status:
-        return _Verdict("REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes, len(new))
+    # Stage 5 — §4.3's two thresholds and §6.3's conflict rule. Which door this proposal faces
+    # is decided by one fact, and it is not a judgment: does the claimed status differ from the
+    # one in force? A first belief has nothing to contradict, so it is never a flip.
+    flip = previous is not None and previous.status != status
+    threshold = FLIP_THRESHOLD if flip else NEW_BELIEF_THRESHOLD
+    if conf < threshold:
+        return _Verdict(
+            "REJECT", "BELOW_THRESHOLD", conf, agent, version, supersedes, len(new), threshold
+        )
+
+    # §6.3: a flip "additionally requires at least one evidence item of a `source_class`
+    # different from the class that established the current status" — which is the set of
+    # classes the version in force rests on, already in hand from stage 3's read. A single
+    # sensor cannot both set and clear an alarm, and this is that sentence as a set difference.
+    if flip and not {item.source_class for item in new} - {item.source_class for item in known}:
+        return _Verdict(
+            "REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes, len(new), threshold
+        )
 
     committed_at = now.astimezone(UTC).strftime(TIMESTAMP)
     proposed = beliefs.BeliefVersion(
@@ -369,7 +415,7 @@ async def _decide(
         entity=entity,
         status=status,
         confidence=conf,
-        threshold=NEW_BELIEF_THRESHOLD,
+        threshold=threshold,
         evidence_ids=(*(previous.evidence_ids if previous else ()), *(item.id for item in new)),
         authority=f"{agent.id}@{agent.version} (standing: {agent.standing})",
         committed_at=committed_at,
@@ -387,7 +433,13 @@ async def _decide(
     except beliefs.VersionConflict:
         # Another writer got this version number first. Losing is the correct outcome: §6 is
         # append-only, and the winner's version is the one the chain now runs through.
-        return _Verdict("REJECT", "VERSION_CONFLICT", conf, agent, version, supersedes, len(new))
+        return _Verdict(
+            "REJECT", "VERSION_CONFLICT", conf, agent, version, supersedes, len(new), threshold
+        )
     except beliefs.BeliefStoreError:
-        return _Verdict("REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes, len(new))
-    return _Verdict("COMMIT", "ABOVE_THRESHOLD", conf, agent, version, supersedes, len(new))
+        return _Verdict(
+            "REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes, len(new), threshold
+        )
+    return _Verdict(
+        "COMMIT", "ABOVE_THRESHOLD", conf, agent, version, supersedes, len(new), threshold
+    )
