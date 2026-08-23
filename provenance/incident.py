@@ -26,8 +26,10 @@ Four properties this file is responsible for, and no other file is:
    that never becomes a validated Action simply ends the incident. Since item 10 something
    downstream actually mutates state, and `executor.execute()` re-checks the decision's
    signature, outcome and subject rather than trusting that this node routed correctly.
-4. **§7.2's rule for learning.** A belief is committed on `CONFIRMED` and on nothing else.
-   `REFUTED` and `INCONCLUSIVE` both escalate and write nothing -- no partial credit.
+4. **§7.2's rule for learning.** Memory learns from the two outcomes verification could
+   *settle*, and from neither the third nor a missing one. `CONFIRMED` commits what worked;
+   `REFUTED` commits the negative belief, because confirmed negative knowledge is real
+   knowledge (item 19); `INCONCLUSIVE` writes nothing at all -- no partial credit.
 
 Item 10 appended `execute`, the Verification Agent and `resolve`, and gave `authorize` a
 `ctx.route`; nothing else about the item-9 graph changed. `resolve` is the node that opens
@@ -104,6 +106,22 @@ VERIFICATION_VERSION = "v1"
 # is what first proposes a status a model had to derive, and this line is what it replaces.
 BELIEF_STATUS = "CONFIG_REGRESSION_PRONE"
 
+# And what a *refuted* one teaches (item 19). §7.2 words it "rollback of v42 did not resolve
+# this deviation", which is a claim about the remediation and not about the cause: a rollback
+# that failed to help does not show the config was innocent. Hence a status naming the
+# remediation rather than the negation of the one above -- and hence `policy.commit()` rather
+# than `policy.retract()`, since there is nothing here that the confirmed run got wrong
+# (ADR-022, answering ADR-019's revisit clause).
+REFUTED_STATUS = "ROLLBACK_INEFFECTIVE"
+
+# §7.2's table as data: the outcomes memory learns from, and what each teaches. `INCONCLUSIVE`
+# is absent rather than mapped to None, so "no partial credit" is the shape of this dict and
+# not a branch someone can soften -- adding a third key is the only way to commit on ambiguity.
+_LEARNS_FROM: dict[VerificationOutcome, str] = {
+    "CONFIRMED": BELIEF_STATUS,
+    "REFUTED": REFUTED_STATUS,
+}
+
 _APP = "provenance"
 
 
@@ -128,8 +146,12 @@ class IncidentResult:
     """What one turn of the loop produced. `outcome` is the discriminator, not `decision`.
 
     The last three are `None` whenever the path was not taken -- a held incident executes
-    nothing, an escalated one verifies nothing, and an INCONCLUSIVE verification writes no
-    belief. Absent means the stage did not happen, never that it happened emptily.
+    nothing, one escalated before the gateway verifies nothing, and an INCONCLUSIVE
+    verification writes no belief. Absent means the stage did not happen, never that it
+    happened emptily.
+
+    `ESCALATED` with a `belief` set is item 19's shape and is not a contradiction: a refuted
+    remediation taught the fleet something and still left the incident open for a human.
     """
 
     incident_id: str
@@ -364,6 +386,14 @@ def build_graph(
             scratch.reasons.append(f"{type(error).__name__}: {error}")
             ctx.route = "HALT"
             return
+        # §9's third switch (item 19), read at execution time like the second one. It routes
+        # past the Verification Agent *after* the action has really run, so this is genuinely
+        # §7.3's "executed and never verified" row rather than a skipped remediation --
+        # `run_incident()` below is what then emits the INCONCLUSIVE span, exactly as it does
+        # for an agent that raised. Nothing here decides what the outcome is.
+        if scratch.execution.verification_ambiguous:
+            ctx.route = "HALT"
+            return
         ctx.state["success_predicate"] = scratch.validated.success_predicate
         ctx.state["post_error_rate"] = scratch.post_state.error_rate
         ctx.state["post_config_version"] = scratch.post_state.config_version
@@ -432,9 +462,15 @@ async def _resolve(
 
     | outcome | belief | incident |
     |---|---|---|
-    | `CONFIRMED` | committed at computed confidence | `RESOLVED` |
-    | `REFUTED` | none (item 19 writes the negative belief) | `ESCALATED` |
+    | `CONFIRMED` | `BELIEF_STATUS`, at computed confidence | `RESOLVED` |
+    | `REFUTED` | `REFUTED_STATUS`, at computed confidence (item 19) | `ESCALATED` |
     | `INCONCLUSIVE` | **none** -- no partial credit | `ESCALATED` |
+
+    The two committing rows go through the same `policy.commit()` and differ by one string, so
+    the engine -- not this node -- decides what a refutation is allowed to write. On a service
+    with no prior belief that is a v1 at 0.60; on one already carrying the confirmed status it
+    is a status flip, which §6.3 refuses without a second source class. Both are correct, and
+    neither is a branch here (ADR-022).
 
     The span carries `action.predicate_id()`, byte-identical to the one the incident span
     already carried before anything executed. That pairing is what makes "declared before
@@ -454,13 +490,16 @@ async def _resolve(
     ) as rec:
         outcome = _verification_outcome(verified)
         scratch.verification = outcome
-        if outcome == "CONFIRMED":
+        if outcome in _LEARNS_FROM:
             scratch.belief = await _commit_belief(
-                scratch, domain=domain, agent_id=agent_id, now=now, client=client
+                scratch,
+                status=_LEARNS_FROM[outcome],
+                domain=domain,
+                agent_id=agent_id,
+                now=now,
+                client=client,
             )
-            scratch.outcome = "RESOLVED"
-        else:
-            scratch.outcome = "ESCALATED"
+        scratch.outcome = "RESOLVED" if outcome == "CONFIRMED" else "ESCALATED"
         rec.set_outcome(
             outcome=outcome,
             belief_written=scratch.belief is not None and scratch.belief.outcome == "COMMIT",
@@ -468,7 +507,13 @@ async def _resolve(
 
 
 async def _commit_belief(
-    scratch: _Scratch, *, domain: str, agent_id: str, now: datetime, client: Any | None
+    scratch: _Scratch,
+    *,
+    status: str,
+    domain: str,
+    agent_id: str,
+    now: datetime,
+    client: Any | None,
 ) -> policy.BeliefCommit:
     """One §3.3 Evidence item, built from what code measured, handed to the Policy Engine.
 
@@ -498,7 +543,7 @@ async def _commit_belief(
     return await policy.commit(
         entity=validated.target,
         domain=domain,
-        status=BELIEF_STATUS,
+        status=status,
         evidence=[evidence],
         agent_id=agent_id,
         now=now,

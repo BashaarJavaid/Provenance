@@ -19,10 +19,11 @@ about how it gets its numbers are load-bearing:
   * **`known_good_version` is read off the entity model, never off the Action.** §3.1 has
     eight fields and no `params` precisely so this is true (ADR-011): a version the Planner
     supplied would be a typed channel from a model onto stored state.
-  * **The fault switch is read fresh, at execution time.** ADR-009 put `fault_injection/{id}`
-    in Firestore rather than in deploy config so a fault is one write, flippable on camera
-    mid-incident. Reading it at boot, or caching it, would make item 19's `rollback_fails`
-    beat un-recordable.
+  * **The fault switches are read fresh, at execution time.** ADR-009 put
+    `fault_injection/{id}` in Firestore rather than in deploy config so a fault is one write,
+    flippable on camera mid-incident. Reading them at boot, or caching them, would make item
+    19's `rollback_fails` and `verification_ambiguous` beats un-recordable. Only the first
+    changes what this module writes; the second rides out on the result for the control loop.
 
 Fail-closed like `registry.py`: nothing returns an optional, every Google API failure becomes
 `ExecutionError`, and item 10's control loop catches it and escalates without verifying and
@@ -52,12 +53,19 @@ APPROVING = ("APPROVE", "APPROVE_NOTIFY")
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    """What the executor did. `rollback_failed` is the §9 switch, reported not hidden."""
+    """What the executor did, and the §9 switches behind it -- reported, never hidden.
+
+    `rollback_failed` changed what this module wrote. `verification_ambiguous` changed
+    nothing here and is carried anyway, because it is read off the same document in the same
+    request-time read and the control loop is what acts on it (item 19). Fetching it a second
+    time in the graph node would be a second read of one document for one boolean.
+    """
 
     target: str
     from_version: str
     to_version: str
     rollback_failed: bool
+    verification_ambiguous: bool = False
 
 
 @dataclass(frozen=True)
@@ -130,6 +138,9 @@ async def execute(
 
     fault = await _read(FAULT_INJECTION, action_.target, client)
     rollback_fails = bool(fault.get("rollback_fails"))
+    # Read here rather than in the graph node: one request-time read of one document, and the
+    # node that acts on it is the same node that already holds the `ExecutionResult`.
+    verification_ambiguous = bool(fault.get("verification_ambiguous"))
 
     service = company.service(action_.target)
     known_good = service.known_good_version
@@ -152,6 +163,7 @@ async def execute(
         from_version=service.current_config_version or "unknown",
         to_version=known_good,
         rollback_failed=rollback_fails,
+        verification_ambiguous=verification_ambiguous,
     )
 
 

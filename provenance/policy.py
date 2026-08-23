@@ -26,7 +26,10 @@ current status — which is read off the classes the current version's evidence 
 door alone would be weaker than either document: at 0.70 without the class rule, one sensor
 could set and clear its own alarm. The two refusals are told apart by name — below the number
 is `BELOW_THRESHOLD` carrying `threshold = 0.70`, no different class is `FLIP_UNSUPPORTED` —
-because the trace has to say *which* door stopped it. Same status, new evidence, is a
+because the trace has to say *which* door stopped it. A flip that missed the number while
+still clearing 0.50 is named `INSUFFICIENT_FOR_FLIP` instead, because the trace also has to
+say *how badly*: that one is an honest agent meeting a higher door and does not cost standing,
+where a proposal below both doors is the poisoning case and does. Same status, new evidence, is a
 re-affirmation at the 0.50 door: v2 supersedes v1, and v1 is left exactly as it was committed.
 
 **One source class cannot reach 0.70.** The strongest base weight is 0.60 and `confidence()`
@@ -122,6 +125,7 @@ FLIP_THRESHOLD = 0.70
 CommitReason = Literal[
     "ABOVE_THRESHOLD",
     "BELOW_THRESHOLD",
+    "INSUFFICIENT_FOR_FLIP",
     "STANDING_NOT_GOOD",
     "DOMAIN_NOT_HELD",
     "REGISTRY_UNAVAILABLE",
@@ -151,7 +155,12 @@ UNKNOWN = "UNKNOWN"
 # authority; counting them would only re-degrade an agent that is degraded.
 # authority. NOTHING_TO_RETRACT is a statement about the store's state rather than about the
 # agent's evidence — retracting a belief that is not there is a mistake, but it is not the
-# kind §3.4 counts, and counting it would let a typo degrade an agent.
+# kind §3.4 counts, and counting it would let a typo degrade an agent. INSUFFICIENT_FOR_FLIP
+# is out for the sharper version of the same reason (item 19): the evidence *was* verifiable
+# and would have carried a new belief — it met a higher door, which is not a fact about the
+# agent's honesty. Counting it would degrade an agent for correctly reporting that its own
+# remediation failed. BELOW_THRESHOLD keeps everything below 0.50, which is where the
+# unverifiable claims are.
 COUNTED_REJECTIONS: frozenset[CommitReason] = frozenset(
     {"BELOW_THRESHOLD", "FLIP_UNSUPPORTED", "RETRACTION_UNSUPPORTED", "NO_NEW_EVIDENCE"}
 )
@@ -554,9 +563,18 @@ async def _decide(
     flip = not retracting and previous is not None and previous.status != status
     threshold = FLIP_THRESHOLD if flip else NEW_BELIEF_THRESHOLD
     if conf < threshold:
-        return _Verdict(
-            "REJECT", "BELOW_THRESHOLD", conf, agent, version, supersedes, len(new), threshold
+        # Two different statements about the proposing agent, and §3.4's counter needs them
+        # apart. "Your evidence could not support a belief at all" is the poisoning case --
+        # `unverified_external_claim` at 0.00 -- and it must cost standing. "Your evidence was
+        # good enough for a new belief and not for overturning one" is an honest agent meeting
+        # a higher door, and counting it would degrade an agent for reporting accurately: item
+        # 19's refuted remediation brings a real `verified_system_observation` at 0.60 against
+        # the 0.70 flip door. The split lands exactly on `NEW_BELIEF_THRESHOLD`, so the
+        # poisoner is below both doors and still reported under the counted reason.
+        reason: CommitReason = (
+            "INSUFFICIENT_FOR_FLIP" if flip and conf >= NEW_BELIEF_THRESHOLD else "BELOW_THRESHOLD"
         )
+        return _Verdict("REJECT", reason, conf, agent, version, supersedes, len(new), threshold)
 
     # §6.3: a flip "additionally requires at least one evidence item of a `source_class`
     # different from the class that established the current status" — which is the set of

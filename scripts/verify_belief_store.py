@@ -318,8 +318,17 @@ async def checks(client: firestore.AsyncClient) -> None:
     # -- so the same-class refusal only becomes reachable once the chain rests on two classes,
     # which is what `conflict_rule_checks` sets up. Both refusals, told apart by name.
     check(
-        (flip.outcome, flip.reason) == ("REJECT", "BELOW_THRESHOLD"),
-        f"the flip was {flip.outcome}/{flip.reason}, expected REJECT/BELOW_THRESHOLD",
+        (flip.outcome, flip.reason) == ("REJECT", "INSUFFICIENT_FOR_FLIP"),
+        f"the flip was {flip.outcome}/{flip.reason}, expected REJECT/INSUFFICIENT_FOR_FLIP",
+    )
+    # Item 19 split the number's refusal in two. 0.60 cleared the *new-belief* door, so this
+    # evidence would have carried a belief of its own and merely could not overturn one --
+    # which is a different statement about the agent than the unverifiable claims further
+    # down, and is why this one does not cost standing.
+    check(
+        flip.confidence >= policy.NEW_BELIEF_THRESHOLD,
+        f"the flip was refused at {flip.confidence:.2f}, below the 0.50 door -- then it is the "
+        "poisoning case and should have kept the counted name",
     )
     check(
         flip.confidence < policy.FLIP_THRESHOLD,
@@ -406,31 +415,33 @@ async def conflict_rule_checks(
     )
     print("    ok  one sensor cannot set and clear its own alarm (§6.3), and nothing was written")
 
-    # Found by running this: the three refusals *this script deliberately provoked* --
-    # NO_NEW_EVIDENCE, BELOW_THRESHOLD and FLIP_UNSUPPORTED -- are exactly §2.2 stage 6's three,
-    # so the agent degraded in the middle of its own verification. That is the counter working,
-    # and asserting it here is worth more than avoiding it: it proves live that the write is
-    # real and that these three reasons are the ones that count. Then the agent is reinstated,
-    # because the rest of this half needs the authority it just lost.
-    print(
-        "==> the refusals above have degraded the agent -- which is the point; checking, then reinstating"
-    )
+    # Three refusals were provoked above and only **two** of them cost standing, which is the
+    # live proof of item 19's carve-out. NO_NEW_EVIDENCE and FLIP_UNSUPPORTED are statements
+    # about the agent's evidence; INSUFFICIENT_FOR_FLIP is a statement about the *door* -- the
+    # evidence was verifiable and would have carried a new belief. Until item 19 all three
+    # counted and the agent degraded here by accident; §3.4's "third counted refusal ->
+    # DEGRADED" is still proven live, deliberately, by `standing_checks()` below.
+    # The window is cleared anyway, because the rest of this half needs a clean counter: item
+    # 15's RETRACTION_UNSUPPORTED is counted, and on a window already holding two it would
+    # degrade the agent mid-verification and take the authority those checks need.
+    print("==> two of the three refusals above cost standing; checking, then clearing the window")
     provoked = await registry.get_agent(AGENT_ID, client=client)
     check(
-        len(provoked.rejection_window) == 3,
-        f"the three counted refusals left {len(provoked.rejection_window)} entries on the record",
-    )
-    check(
-        provoked.standing == "DEGRADED",
-        f"three counted refusals left standing at {provoked.standing}, expected DEGRADED",
-    )
-    check(
         [entry.reason for entry in provoked.rejection_window]
-        == ["NO_NEW_EVIDENCE", "BELOW_THRESHOLD", "FLIP_UNSUPPORTED"],
-        f"the window holds {[e.reason for e in provoked.rejection_window]!r}; expected the three "
+        == ["NO_NEW_EVIDENCE", "FLIP_UNSUPPORTED"],
+        f"the window holds {[e.reason for e in provoked.rejection_window]!r}; expected the two "
         "refusals that are statements about the agent's evidence, in the order they happened",
     )
-    print("    ok  §2.2 stage 6 wrote all three, and the third one degraded it (§3.4)")
+    check(
+        "INSUFFICIENT_FOR_FLIP" not in [entry.reason for entry in provoked.rejection_window],
+        "the flip refused for missing the higher door cost the agent standing (item 19)",
+    )
+    check(
+        provoked.standing == "GOOD",
+        f"two counted refusals left standing at {provoked.standing}, expected GOOD -- §3.4's "
+        "threshold is three",
+    )
+    print("    ok  §2.2 stage 6 counted the two evidence-shaped refusals and not the third")
     await reinstate(client)
 
     print("==> proposing the same flip on a genuinely different class -- §6.3's legitimate update")

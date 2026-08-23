@@ -84,12 +84,19 @@ class FakeLlm(BaseLlm):
         )
 
 
-def a_store(*, sre: dict[str, Any] | None = None, **overrides: Any) -> FakeFirestore:
+def a_store(
+    *,
+    sre: dict[str, Any] | None = None,
+    rollback_fails: bool = False,
+    verification_ambiguous: bool = False,
+    **overrides: Any,
+) -> FakeFirestore:
     """The registry, plus the three collections item 10's executor and Policy Engine touch.
 
     `sre` overrides the *domain* agent's record, which is the one the belief is written under
-    (§3.4: memory-domain authority is per agent). `overrides` still go to the Planner, so
-    every item-9 call site reads unchanged.
+    (§3.4: memory-domain authority is per agent). The two switches are item 19's, written as
+    `scripts/inject_fault.py` writes them. `overrides` still go to the Planner, so every
+    item-9 call site reads unchanged.
     """
     planner_record = registry.Agent(
         id="remediation-planner",
@@ -123,7 +130,13 @@ def a_store(*, sre: dict[str, Any] | None = None, **overrides: Any) -> FakeFires
                 "healthy": False,
             }
         },
-        fault_injection={"inventory-api": {"error_rate_spike": True, "rollback_fails": False}},
+        fault_injection={
+            "inventory-api": {
+                "error_rate_spike": True,
+                "rollback_fails": rollback_fails,
+                "verification_ambiguous": verification_ambiguous,
+            }
+        },
         beliefs={},
         authorizations={},
     )
@@ -566,20 +579,134 @@ def test_an_inconclusive_verification_writes_nothing_and_escalates(
     assert verified.status.status_code is not StatusCode.ERROR
 
 
-def test_a_refuted_verification_writes_nothing_yet_either(spans: InMemorySpanExporter) -> None:
-    """Item 19 owns the negative belief. Until then REFUTED escalates and learns nothing.
+def test_a_refuted_verification_writes_the_negative_belief(spans: InMemorySpanExporter) -> None:
+    """§7.2's second row (item 19): "Confirmed negative knowledge is real knowledge."
 
-    Stated as a test rather than left implicit so that item 19 *changes* a red assertion
-    instead of quietly filling a gap nobody had written down.
+    Until item 19 this test asserted the opposite -- it was left deliberately red so that the
+    item would *turn* an assertion rather than quietly fill a gap nobody had written down.
+
+    Two things it pins beyond the commit itself. The status is `ROLLBACK_INEFFECTIVE`, a claim
+    about the remediation rather than the negation of `BELIEF_STATUS`: a rollback that failed
+    to help does not show the config was innocent. And the incident still ends `ESCALATED` --
+    the fleet learned something and the deviation is still there, which is not a contradiction.
     """
-    store = a_store()
+    store = a_store(rollback_fails=True)
     result = run(
         [a_classification(), a_diagnosis(), a_proposal(), a_verification("REFUTED")], store=store
     )
 
     assert result.outcome == "ESCALATED"
     assert result.verification == "REFUTED"
-    assert result.belief is None and store.collections["beliefs"] == {}
+    assert result.belief is not None
+    assert (result.belief.outcome, result.belief.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert result.belief.version == 1
+    assert result.belief.confidence == pytest.approx(0.60)
+    policy.verify_commit(result.belief, policy.public_key_pem())
+
+    # The failed rollback still deployed, and the belief records what was measured after it.
+    assert result.execution is not None and result.execution.rollback_failed is True
+    service = store.collections["services"]["inventory-api"]
+    assert (service["current_config_version"], service["error_rate"]) == ("v41", 0.38)
+
+    version = store.collections["beliefs/belief-inventory-api/versions"]["1"]
+    assert version["status"] == incident.REFUTED_STATUS == "ROLLBACK_INEFFECTIVE"
+    assert version["status"] != incident.BELIEF_STATUS
+
+    verified = next(
+        s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_VERIFICATION_OUTCOME
+    )
+    assert verified.attributes is not None
+    assert verified.attributes["provenance.verification.belief_written"] is True
+    # A refutation is still a failure of the remediation, so §8.1 keeps it an error status --
+    # unlike INCONCLUSIVE, which is an honest answer.
+    assert verified.status.status_code is StatusCode.ERROR
+
+
+def test_a_refutation_cannot_flip_a_confirmed_belief_on_its_own(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The other half of item 19's decision: the *engine* decides what a refutation may write.
+
+    `_resolve` hands `policy.commit()` one different string and nothing else, so a service
+    already carrying `CONFIG_REGRESSION_PRONE` puts the negative belief through §6.3's flip
+    door: 0.70, plus at least one source class the chain does not already rest on. One fresh
+    `verified_system_observation` is 0.60 in a class already present, so it is refused twice
+    over and the confirmed version stands.
+
+    Retracting instead was the alternative (ADR-019's revisit clause) and is wrong on the
+    merits: a rollback that did not help does not disprove that the config regressed.
+
+    The refusal is `INSUFFICIENT_FOR_FLIP`, not `BELOW_THRESHOLD`, and it costs the agent
+    nothing. 0.60 cleared the new-belief door -- this evidence would have carried a belief of
+    its own -- so it is an honest report meeting a higher door, not the unverifiable claim
+    §3.4's counter exists to catch. Counting it would degrade an SRE agent for correctly
+    reporting that its own remediation failed.
+    """
+    store = a_store()
+    confirmed = run(a_clean_run(), store=store, now=NOW)
+    assert confirmed.belief is not None and confirmed.belief.outcome == "COMMIT"
+
+    refuted = run(
+        [a_classification(), a_diagnosis(), a_proposal(), a_verification("REFUTED")],
+        store=store,
+        now=NOW + timedelta(days=1),
+    )
+
+    assert refuted.verification == "REFUTED"
+    assert refuted.belief is not None
+    assert (refuted.belief.outcome, refuted.belief.reason) == ("REJECT", "INSUFFICIENT_FOR_FLIP")
+    assert refuted.belief.reason not in policy.COUNTED_REJECTIONS
+    assert store.docs["sre-infra-agent"]["rejection_window"] == []
+    versions = store.collections["beliefs/belief-inventory-api/versions"]
+    assert list(versions) == ["1"], "a refused flip must not append a version"
+    assert versions["1"]["status"] == incident.BELIEF_STATUS
+
+    belief_span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT]
+    assert belief_span[-1].attributes is not None
+    assert belief_span[-1].attributes["provenance.belief.threshold"] == pytest.approx(0.70)
+    assert belief_span[-1].attributes["provenance.belief.supersedes"] == 1
+
+
+def test_the_ambiguity_switch_executes_and_then_never_asks_the_verification_agent(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§9's third switch (item 19), forcing §7.3's row rather than a model's opinion.
+
+    The point of routing past the agent *after* `read_state()` is that this is genuinely
+    "executed and never verified" and not a skipped remediation -- the rollback lands, and
+    §7.3 says the honest verdict on an action nobody could check is INCONCLUSIVE.
+
+    The unconsumed fourth reply is the assertion that matters: it proves the agent was never
+    asked, which is the only difference between this and a model that happened to hedge.
+    """
+    store = a_store(verification_ambiguous=True)
+    model = FakeLlm(model="fake-model", replies=a_clean_run(), prompts=[])
+    result = asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=store,
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+
+    assert result.execution is not None, "the rollback should still have executed"
+    assert store.collections["services"]["inventory-api"]["current_config_version"] == "v41"
+    assert result.verification == "INCONCLUSIVE"
+    assert result.outcome == "ESCALATED"
+    assert result.belief is None
+    assert store.collections["beliefs"] == {}
+    assert model.replies == [a_verification()], "the Verification Agent was asked after all"
+
+    verified = next(
+        s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_VERIFICATION_OUTCOME
+    )
+    assert verified.attributes is not None
+    assert verified.attributes["provenance.verification.belief_written"] is False
+    assert verified.status.status_code is not StatusCode.ERROR
 
 
 def test_a_verification_agent_that_cannot_answer_is_inconclusive(

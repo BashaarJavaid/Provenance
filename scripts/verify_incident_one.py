@@ -102,6 +102,10 @@ EXPECTED_COMPONENTS = (1, 1, 0, 0)
 
 # §4.3's arithmetic over the one thing incident #1 can honestly claim to know:
 # `1 - (1 - 0.60) = 0.60` from a single fresh `verified_system_observation`.
+# §9's three switches. Named here because the teardown has to clear every one of them, not
+# only the one a given script sets -- `verify_refuted.py` (item 19) sets the other two.
+SWITCHES = ("error_rate_spike", "rollback_fails", "verification_ambiguous")
+
 BELIEF_ID = f"belief-{TARGET}"
 EXPECTED_CONFIDENCE = 0.60
 
@@ -154,7 +158,10 @@ def restore_service(client: firestore.Client) -> None:
             "current_config_version": service.current_config_version,
         }
     )
-    client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
+    # All three §9 switches, not just the one this script sets (item 19). `verify_refuted.py`
+    # shares this teardown and sets the other two, and a restore that left one on would hand
+    # the next run a fault nothing clears.
+    client.collection("fault_injection").document(TARGET).update(dict.fromkeys(SWITCHES, False))
 
 
 def restore(client: firestore.Client) -> None:
@@ -219,10 +226,12 @@ def refuse_if_dirty(client: firestore.Client) -> bool:
     back as the baseline, which is worse than the run simply not happening.
     """
     switch = client.collection("fault_injection").document(TARGET).get().to_dict() or {}
-    if switch.get("error_rate_spike"):
+    already_on = [name for name in SWITCHES if switch.get(name)]
+    if already_on:
         print(
-            f"FAIL: fault_injection/{TARGET}.error_rate_spike is already on. Clear it first,\n"
-            "      or this run's restore would write someone else's state back as baseline:\n"
+            f"FAIL: fault_injection/{TARGET} already has {', '.join(already_on)} on. Clear it\n"
+            "      first, or this run's restore would write someone else's state back as\n"
+            "      baseline:\n"
             "        .venv/bin/python scripts/inject_fault.py --clear",
             file=sys.stderr,
         )
