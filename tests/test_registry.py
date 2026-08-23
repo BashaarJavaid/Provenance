@@ -2,8 +2,9 @@
 
 The live half is `scripts/verify_registry.py`, which flips standing against real Firestore
 and re-reads it in the same process. These tests guard the properties later items depend
-on -- item 7 reads standing on every authorization, item 14 applies the window arithmetic,
-item 28's demo beat is a DEGRADED transition -- so breaking one fails the build here.
+on -- item 7 reads standing on every authorization, item 14's `record_rejection()` applies
+the window arithmetic and writes DEGRADED, item 28's demo beat is that transition on screen
+-- so breaking one fails the build here.
 
 The fake store is thirty lines of dict, not a mock framework: the point of the first test
 is that a value changing *between two reads* is visible, which needs a store the test can
@@ -244,6 +245,110 @@ def test_the_stored_standing_is_authoritative_over_the_window() -> None:
     stored = a_stored_agent(standing="GOOD", rejection_window=window)
 
     assert registry.from_document("sre-infra-agent", stored).standing == "GOOD"
+
+
+# --- the standing counter (§2.2 stage 6, item 14) ----------------------------------------
+
+NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+
+
+def a_rejecting_store(**overrides: Any) -> FakeFirestore:
+    return FakeFirestore({"sre-infra-agent": a_stored_agent(**overrides)})
+
+
+def reject(store: FakeFirestore, reason: str = "BELOW_THRESHOLD", *, hours: float = 0.0) -> str:
+    agent = asyncio.run(registry.get_agent("sre-infra-agent", client=store))
+    return asyncio.run(
+        registry.record_rejection(agent, reason, now=NOW - timedelta(hours=hours), client=store)
+    )
+
+
+def stored_window(store: FakeFirestore) -> list[dict[str, Any]]:
+    window = store.docs["sre-infra-agent"]["rejection_window"]
+    assert isinstance(window, list)
+    return window
+
+
+def test_one_rejection_appends_an_entry_and_leaves_standing_alone() -> None:
+    # §2.2 stage 6: "REJECT (logged, standing counter incremented)". The counter is the
+    # length of the list (ADR-010), so incrementing it is appending one entry -- and one
+    # rejection is not three, so nothing about the agent's authority changes yet.
+    store = a_rejecting_store()
+
+    assert reject(store) == "GOOD"
+
+    assert stored_window(store) == [
+        {"rejected_at": "2026-08-22T12:00:00Z", "reason": "BELOW_THRESHOLD"}
+    ]
+    assert store.docs["sre-infra-agent"]["standing"] == "GOOD"
+
+
+def test_the_third_rejection_inside_the_window_writes_degraded_and_the_second_does_not() -> None:
+    # ARCHITECTURE §10's Standing row and §3.4's rule, as the stored document sees it. The
+    # arithmetic runs over the *appended* window, so the third call is the one that degrades:
+    # applying it to the pre-append list would degrade on the fourth.
+    store = a_rejecting_store()
+
+    assert reject(store, hours=2) == "GOOD"
+    assert reject(store, hours=1) == "GOOD"
+    assert store.docs["sre-infra-agent"]["standing"] == "GOOD"
+
+    assert reject(store) == "DEGRADED"
+
+    assert store.docs["sre-infra-agent"]["standing"] == "DEGRADED"
+    assert len(stored_window(store)) == 3
+    # The next read sees it -- this is the value item 7 denies on and item 28 renders.
+    assert asyncio.run(registry.get_agent("sre-infra-agent", client=store)).standing == "DEGRADED"
+
+
+def test_a_rejection_that_has_aged_out_stops_counting_but_is_never_pruned() -> None:
+    # The window rolls (§3.4), so two recent rejections beside one from last week are not
+    # three. The aged entry stays in the document regardless: `degraded_by_window()` filters
+    # on read, and the record of why an agent degraded is what item 28's panel shows.
+    store = a_rejecting_store()
+
+    assert reject(store, hours=25) == "GOOD"
+    assert reject(store, hours=2) == "GOOD"
+    assert reject(store) == "GOOD"
+
+    assert store.docs["sre-infra-agent"]["standing"] == "GOOD"
+    assert len(stored_window(store)) == 3, "nothing is ever removed from the window"
+
+
+def test_the_written_timestamp_is_the_one_the_window_arithmetic_can_read() -> None:
+    # `record_rejection()` writes the Z form the field's docstring claims; `degraded_by_window()`
+    # parses with `fromisoformat`. If those two ever disagree the counter silently stops
+    # counting, so the round trip is asserted rather than assumed.
+    store = a_rejecting_store()
+    reject(store)
+
+    entry = registry.from_document(
+        "sre-infra-agent", store.docs["sre-infra-agent"]
+    ).rejection_window
+    assert entry[0].rejected_at.endswith("Z")
+    assert registry.degraded_by_window(entry * 3, now=NOW)
+
+
+def test_an_unregistered_agent_cannot_have_a_rejection_recorded() -> None:
+    # Fail-closed (§7.3), the same mapping `set_standing()` uses: a write to a record that is
+    # not there raises rather than creating one. A registry entry is minted by the seeder.
+    store = a_rejecting_store()
+    agent = asyncio.run(registry.get_agent("sre-infra-agent", client=store))
+    store.docs.clear()
+
+    with pytest.raises(registry.AgentNotRegistered):
+        asyncio.run(registry.record_rejection(agent, "BELOW_THRESHOLD", now=NOW, client=store))
+
+
+def test_an_unreachable_registry_raises_rather_than_silently_dropping_the_counter() -> None:
+    # The Policy Engine suppresses this deliberately (a refused belief is refused either way),
+    # but it has to be raised to be suppressed -- a swallow here would be invisible.
+    store = a_rejecting_store()
+    agent = asyncio.run(registry.get_agent("sre-infra-agent", client=store))
+    store.error = ServiceUnavailable("firestore is down")
+
+    with pytest.raises(registry.RegistryUnavailable):
+        asyncio.run(registry.record_rejection(agent, "BELOW_THRESHOLD", now=NOW, client=store))
 
 
 # --- the fixture ------------------------------------------------------------------------
