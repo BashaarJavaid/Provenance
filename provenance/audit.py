@@ -15,13 +15,14 @@ informed it.
 
 Three things follow from it that are worth stating before changing anything:
 
-- **`belief_ids` is empty until item 16.** `incident.recall()` returns `()` today, so every
-  record this fleet writes cites nothing and no retraction flags anything. That is the
-  honest state: the mechanism is built and proven with scripted records (the posture item 8
-  used for denial-by-registry and item 14 for the conflict rule), and it starts carrying
-  real ids the moment recall does. The alternative — flagging by `target == entity` and a
-  time window — would flag actions that merely touched the same entity, which is a different
-  and weaker claim than the one §6.4 makes.
+- **`belief_ids` carries what recall resolved by exact key (item 16).** It holds *entity*
+  belief ids and only those: §6.2 caps a class belief as advisory, so one may never be what
+  an action rested on, and recording one here would make a retraction flag actions on
+  grounds §6.2 says they could not have had. `recall.Recalled` keeps the two sets apart and
+  `incident.py` cites `entity_ids`, which is what makes that a property of a type rather
+  than a rule to remember. The alternative to this collection — flagging by `target ==
+  entity` and a time window, with no stored link at all — would flag actions that merely
+  touched the same entity, which is a different and weaker claim than the one §6.4 makes.
 - **Only *authorized* actions are recorded.** §6.4 says "previously authorized". A HELD
   action parked on a human and a DENIED one never happened; neither rests on a belief in the
   way that needs reviewing. `incident.py` records approvals only.

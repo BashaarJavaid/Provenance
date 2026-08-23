@@ -87,8 +87,8 @@ POISON_ENTITY = "verify-standing-counter"
 
 # Item 15's half. `DISPROVING` is the observation that retracts v5; `WEAK` is proposed and never
 # committed. The two authorization records are hand-written for the same reason item 14's
-# proposals were scripted: their real producer is `incident.py`, and what it cites comes from
-# `recall()`, which is item 16's -- so today every real record cites nothing. The control record
+# proposals were scripted: their real producer is `incident.py`, which cites what §6.6's recall
+# resolved for a service this scratch belief is not about. The control record
 # is what makes the check mean "every action authorized on *this* belief" rather than "every
 # action": if flagging ever widened to the whole ledger, only the control would notice.
 DISPROVING_ID = f"ev-{ENTITY}-disproving"

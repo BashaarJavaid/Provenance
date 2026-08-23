@@ -162,6 +162,50 @@ def test_an_unreachable_store_raises_rather_than_reading_as_absent() -> None:
         asyncio.run(beliefs.current(BELIEF_ID, client=store))
 
 
+# --- the statement, and the read the recall index gets (item 16) -----------------------------
+
+
+def test_a_class_statement_reaches_the_root_document() -> None:
+    # Item 16's index reads roots and never versions, so a statement that stayed on the
+    # version would be invisible to it — `class_statements()` would return nothing and recall
+    # would silently nominate nothing forever.
+    store = FakeFirestore({})
+    append(store, a_version(1, scope="CLASS", statement="config deploys correlate with errors"))
+
+    root = store.collections[beliefs.COLLECTION][BELIEF_ID]
+    assert root["statement"] == "config deploys correlate with errors"
+    assert "status" not in root and "confidence" not in root
+
+
+def test_an_entity_version_has_no_statement_and_that_is_not_malformed() -> None:
+    # §3.2 makes `statement` CLASS-only. A store that raised on its absence would refuse to
+    # read back every belief written before this item.
+    store = FakeFirestore({})
+    append(store, a_version(1))
+    assert asyncio.run(beliefs.current(BELIEF_ID, client=store)).statement == ""
+
+    del store.collections[VERSIONS]["1"]["statement"]
+    assert asyncio.run(beliefs.current(BELIEF_ID, client=store)).statement == ""
+
+
+def test_class_statements_returns_only_class_roots() -> None:
+    store = FakeFirestore({})
+    append(store, a_version(1))
+    append(
+        store,
+        a_version(1, belief_id="belief-class-x", scope="CLASS", statement="a class statement"),
+    )
+    assert asyncio.run(beliefs.class_statements(client=store)) == (
+        ("belief-class-x", "a class statement"),
+    )
+
+
+def test_belief_id_for_is_the_one_home_of_the_convention() -> None:
+    # The exact-key read and the write have to agree on it, or recall finds nothing and no
+    # test notices because both sides are separately self-consistent.
+    assert beliefs.belief_id_for(ENTITY) == BELIEF_ID
+
+
 def test_no_store_function_returns_an_optional_version_or_evidence() -> None:
     # The same structural rule `registry.py` follows: `BeliefVersion | None` is one forgotten
     # `if belief:` away from a missing belief reading as "no belief was there". `Evidence` is

@@ -29,8 +29,12 @@ from google.adk.models.llm_response import LlmResponse
 
 from provenance import telemetry
 
-# Session-state key holding what recall nominated (§6.6). Empty until item 16 makes recall real.
+# Session-state keys holding what recall produced (§6.6, item 16). `RECALL_BELIEF_IDS` is what
+# the belief store handed over; `RECALL_NOMINATED_IDS` is what the index proposed before the
+# store dropped whatever was RETRACTED or UNKNOWN(stale). Both go on every reasoning span, and
+# the difference between them is what makes the drop visible rather than merely claimed.
 RECALL_BELIEF_IDS = "recall_belief_ids"
+RECALL_NOMINATED_IDS = "recall_nominated_ids"
 
 
 def model_name(agent: LlmAgent) -> str:
@@ -57,6 +61,7 @@ def attach(
             model=model_name(agent),
             step=step,
             recall_belief_ids=callback_context.state.get(RECALL_BELIEF_IDS) or (),
+            recall_nominated_ids=callback_context.state.get(RECALL_NOMINATED_IDS) or (),
         )
         live[callback_context.invocation_id] = {
             "cm": recorder,

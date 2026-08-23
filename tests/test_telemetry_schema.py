@@ -104,6 +104,7 @@ def _emit_reasoning() -> None:
         model="gemini-2.5-pro",
         step="diagnosis",
         recall_belief_ids=["belief-42"],
+        recall_nominated_ids=["belief-42", "belief-77"],
     ) as rec:
         rec.set_result(
             hypotheses_considered=3,
@@ -265,7 +266,20 @@ def test_reasoning_chain_shape(spans: InMemorySpanExporter) -> None:
         "provenance.reasoning.input_tokens",
         "provenance.reasoning.output_tokens",
         "provenance.recall.belief_ids",
+        "provenance.recall.nominated_ids",
     }
+
+
+def test_the_reasoning_span_shows_what_recall_dropped(spans: InMemorySpanExporter) -> None:
+    # Item 16. The two keys are only worth having as a pair: §6.6's guarantee is that a
+    # RETRACTED belief can be the closest embedding match and still never reach a reasoning
+    # agent, and a span carrying only the survivors cannot tell that apart from an index
+    # that nominated nothing. `belief-77` here is the one the store dropped.
+    _emit_reasoning()
+    span = _only(spans)
+    attributes = dict(span.attributes or {})
+    assert attributes["provenance.recall.nominated_ids"] == ("belief-42", "belief-77")
+    assert attributes["provenance.recall.belief_ids"] == ("belief-42",)
 
 
 def test_incident_shape(spans: InMemorySpanExporter) -> None:
