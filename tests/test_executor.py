@@ -71,7 +71,12 @@ def a_decision(
     )
 
 
-def a_store(*, rollback_fails: bool = False, spiked: bool = True) -> FakeFirestore:
+def a_store(
+    *,
+    rollback_fails: bool = False,
+    verification_ambiguous: bool = False,
+    spiked: bool = True,
+) -> FakeFirestore:
     """The two documents `scripts/inject_fault.py` writes, as it writes them."""
     service = asdict(company.service(TARGET))
     if spiked:
@@ -84,7 +89,7 @@ def a_store(*, rollback_fails: bool = False, spiked: bool = True) -> FakeFiresto
                 "target_id": TARGET,
                 "error_rate_spike": spiked,
                 "rollback_fails": rollback_fails,
-                "verification_ambiguous": False,
+                "verification_ambiguous": verification_ambiguous,
             }
         },
     )
@@ -157,6 +162,27 @@ def test_the_rollback_fails_switch_deploys_the_version_but_leaves_the_rate_spike
     assert state.config_version == "v41"
     assert state.error_rate == 0.38
     assert state.healthy is False
+
+
+def test_the_ambiguity_switch_rides_out_on_the_result_and_changes_nothing_here() -> None:
+    """Item 19's third switch. The executor reports it; the control loop is what acts on it.
+
+    Read here rather than in the graph node because it lives in the document `execute()`
+    already fetches -- but it must not change what this module writes, or the INCONCLUSIVE
+    beat would be a fact about a half-done rollback rather than about an unverified one.
+    """
+    store = a_store(verification_ambiguous=True)
+    action_ = an_action()
+
+    result = asyncio.run(executor.execute(action_, a_decision(action_), client=store))
+    state = asyncio.run(executor.read_state(TARGET, client=store))
+
+    assert result.verification_ambiguous is True
+    assert result.rollback_failed is False
+    # The rollback is untouched: v41 deployed, rate back to nominal, service healthy.
+    assert state.config_version == "v41"
+    assert state.error_rate == company.service(TARGET).error_rate
+    assert state.healthy is True
 
 
 # --- the refusals -------------------------------------------------------------------------

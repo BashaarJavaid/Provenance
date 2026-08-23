@@ -406,26 +406,61 @@ def a_fortnight_later(source_class: str, item_id: str, at: datetime = FORTNIGHT)
 def test_a_flip_below_the_flip_threshold_is_refused_by_the_number(
     spans: InMemorySpanExporter,
 ) -> None:
-    """§4.3's two doors, and the refusal says which one it was.
+    """§4.3's two doors, and the refusal says which one it was *and* how badly it missed.
 
     A re-affirmation at 0.60 commits; the same evidence claiming the opposite status does not,
-    because a flip is judged against 0.70. `BELOW_THRESHOLD` carrying `threshold = 0.70` is the
-    honest report — the claim was not refused for lacking corroboration, it was refused for
-    not being confident enough to be worth checking corroboration for.
+    because a flip is judged against 0.70. The claim was not refused for lacking corroboration,
+    it was refused for not being confident enough to be worth checking corroboration for.
+
+    The name is `INSUFFICIENT_FOR_FLIP` rather than `BELOW_THRESHOLD` because 0.60 cleared the
+    *new-belief* door: this evidence would have carried a belief of its own and simply could
+    not overturn one. That is a different statement about the agent than the poisoning case
+    below, and §3.4's counter has to tell them apart — see the companion test.
     """
     store = a_store()
     commit(store)
 
     flip = commit(store, [a_later_evidence()], status="HEALTHY", now=LATER)
 
-    assert (flip.outcome, flip.reason) == ("REJECT", "BELOW_THRESHOLD")
+    assert (flip.outcome, flip.reason) == ("REJECT", "INSUFFICIENT_FOR_FLIP")
     assert flip.confidence == pytest.approx(0.60)
     assert flip.version == 2
     assert "2" not in store.collections[VERSIONS]
+    # It cost the agent nothing: honest evidence that met a higher door is not a strike.
+    assert window(store) == []
     span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
     assert span.attributes is not None
     assert span.attributes["provenance.belief.threshold"] == pytest.approx(0.70)
     assert span.attributes["provenance.belief.supersedes"] == 1
+
+
+def test_a_flip_below_both_doors_is_the_poisoning_case_and_still_costs_standing() -> None:
+    """The other side of the split, and the reason it lands exactly on `NEW_BELIEF_THRESHOLD`.
+
+    An `unverified_external_claim` weighs 0.00 (§4.3), so it adds nothing to the accumulated
+    set and the flip is carried entirely by v1's own evidence, decayed by exactly half a
+    half-life: `0.60 x 2^(-15/30) = 0.4243`. Below the 0.50 door as well as the 0.70 one, so it
+    keeps the counted name and item 28's poisoning arc -- three attempts inside the window ->
+    DEGRADED -- is untouched by item 19's carve-out.
+
+    Without this test the split looks like it merely renames a refusal, and a mutation moving
+    the boundary to `FLIP_THRESHOLD` (which would exempt the poisoner too) stays green.
+    """
+    store = a_store()
+    commit(store)
+
+    flip = commit(
+        store,
+        [a_fortnight_later("unverified_external_claim", "ev-junk")],
+        status="HEALTHY",
+        now=FORTNIGHT,
+    )
+
+    assert (flip.outcome, flip.reason) == ("REJECT", "BELOW_THRESHOLD")
+    assert flip.confidence == pytest.approx(0.60 * 2 ** (-15 / policy.HALF_LIFE_DAYS))
+    assert flip.confidence < policy.NEW_BELIEF_THRESHOLD
+    assert "2" not in store.collections[VERSIONS]
+    assert [entry["reason"] for entry in window(store)] == ["BELOW_THRESHOLD"]
 
 
 def test_a_same_source_class_flip_is_refused_even_above_the_threshold(
