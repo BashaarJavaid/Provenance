@@ -38,7 +38,9 @@ a `None` someone forgets to branch on is how an unwritten belief becomes a writt
 
 Schema reasoning in `docs/adr/ADR-016`, and `docs/adr/ADR-017` for the novelty check item 13
 added over the evidence this module stores (`evidence_id`, `read_evidence`, `novel`). Item 14
-adds the §6.3 conflict rule; item 15 `RETRACT`; item 16 recall.
+added the §6.3 conflict rule and item 15 §6.4's `RETRACT`, **neither of which changed this
+module**: a retraction appends a version whose status is `RETRACTED`, so `append()` is still
+the only writer here and there is still no delete. Item 16 adds recall.
 """
 
 from __future__ import annotations

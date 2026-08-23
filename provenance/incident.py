@@ -58,6 +58,7 @@ from google.genai import types
 
 from provenance import (
     action,
+    audit,
     beliefs,
     credentials,
     executor,
@@ -151,6 +152,10 @@ class _Scratch:
     """
 
     outcome: IncidentOutcome = "ESCALATED"
+    # What `recall()` nominated for this incident. Item 15's ledger cites it, so a later
+    # retraction of one of these beliefs can flag the action this incident authorized.
+    # Empty until item 16 builds recall (§6.6).
+    recalled: tuple[str, ...] = ()
     decision: gateway.Decision | None = None
     validated: action.Action | None = None
     proposal: dict[str, Any] | None = None
@@ -187,6 +192,10 @@ async def recall(entity_id: str) -> tuple[str, ...]:
     so that item 18's `verify:` line -- "the recall event appears in the trace before the
     domain agent's first hypothesis" -- has a slot to fill rather than a graph to reshape,
     and so the reasoning spans carry `recall.belief_ids` from the first incident onward.
+
+    Item 15 added a second consumer: what this returns is cited by the authorization ledger
+    (`audit.record()`), which is what lets a retraction flag the actions that rested on the
+    retracted belief (§6.4). Until this returns real ids, every ledger record cites nothing.
     """
     return ()
 
@@ -317,7 +326,35 @@ def build_graph(
         scratch.outcome = _OUTCOME_FOR[decision.outcome]
         # A HOLD parks on a human (§2.1 stage 7, item 30) and a DENY is over. Only an
         # approval continues, and `executor.execute()` re-checks the signature anyway.
-        ctx.route = "EXECUTE" if decision.outcome in executor.APPROVING else "HALT"
+        if decision.outcome not in executor.APPROVING:
+            ctx.route = "HALT"
+            return
+
+        # §6.4's ledger (item 15). Approvals only -- "previously **authorized**" is what a
+        # retraction flags, and a held or denied action never rested on anything.
+        assert scratch.validated is not None  # `validate` routes here only on success
+        try:
+            await audit.record(
+                agent_id=PLANNER_ID,
+                action_class=scratch.validated.action_class,
+                target=scratch.validated.target,
+                outcome=decision.outcome,
+                subject=decision.subject,
+                signature=decision.signature,
+                belief_ids=scratch.recalled,
+                now=now,
+                client=client,
+            )
+        except audit.AuditError as error:
+            # Fail closed (§7.3): an authorization nothing recorded is one no retraction can
+            # ever flag, which silently weakens §6.4. The belief store is the same Firestore,
+            # so an incident that cannot write this could not have committed its belief either.
+            scratch.reasons.append(f"{type(error).__name__}: {error}")
+            scratch.outcome = "ESCALATED"
+            ctx.route = "HALT"
+            return
+
+        ctx.route = "EXECUTE"
 
     async def execute(ctx: Context) -> None:
         """The one node that changes the world. Nothing here decides whether it may."""
@@ -515,6 +552,7 @@ async def run_incident(
     ) as recorder:
         agent = await registry.get_agent(PLANNER_ID, client=client)
         recalled = await recall(trigger.target)
+        scratch.recalled = recalled
         state = _seed_state(trigger, agent.version, recalled)
 
         graph = build_graph(

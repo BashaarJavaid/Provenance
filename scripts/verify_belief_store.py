@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Check ROADMAP items 12, 13 and 14's `verify:` lines against real Firestore: committing a
+"""Check ROADMAP items 12-15's `verify:` lines against real Firestore: committing a
 superseding belief leaves the old version intact and linked, nothing is ever deleted, a
 duplicate `(source_id, observed_at)` is refused rather than written, a status flip is refused
-on same-class evidence even above 0.70 and commits on a different class, and three refused
-writes degrade the agent that made them.
+on same-class evidence even above 0.70 and commits on a different class, three refused
+writes degrade the agent that made them, and retracting a belief flags every action that was
+authorized on it -- and only those.
 
     GOOGLE_CLOUD_PROJECT=provenance-hackathon .venv/bin/python scripts/verify_belief_store.py
 
@@ -15,9 +16,9 @@ the real registry read -- against a scratch entity that appears in no incident.
 
 The script writes live state and cleans up after itself on every exit path including Ctrl-C,
 the same posture as `scripts/verify_denial_by_registry.py`. **The delete lives here and never
-in `provenance/`**: §6 makes beliefs append-only, and the only two things that may remove one
-are a test fixture and a retraction (§6.4, item 15) -- and only one of those belongs in the
-product. It refuses to run if the scratch belief already exists, since a leftover chain would
+in `provenance/`**: §6 makes beliefs append-only, and item 15 did not change that -- a
+retraction *appends* a `RETRACTED` version, so removing one is still a test fixture's job
+alone. It refuses to run if the scratch belief already exists, since a leftover chain would
 make "v2 supersedes v1" pass for the wrong reason.
 
 Item 13's half is here rather than in a script of its own because §2.2 stage 3 reads the
@@ -26,12 +27,19 @@ fake cannot vouch for. Note that this script hand-writes its evidence ids rather
 `beliefs.evidence_id()` -- deliberately, because that is the case proving the novelty check
 compares pairs and not ids.
 
-Item 14 adds two sections, in this order because the second one takes the agent's authority
-away and the first one needs it:
+Items 14 and 15 add three sections, in this order because the last one takes the agent's
+authority away and the first two need it:
 
   - **The conflict rule.** The chain reaches two source classes, then a flip is proposed on a
     third reading of a class already in the set -- above 0.70, so the number is not what stops
     it -- and then on a class that is genuinely new. §6.3 as arithmetic, against a real store.
+  - **Retraction (item 15).** Two authorization records are seeded, one citing this belief and
+    one citing another; a retraction on `third_party_audit` is refused *above* the 0.50 door,
+    because §6.4 asks for a class at least as strong as the `verified_system_observation` that
+    established the chain; then one on that class retracts, writing a `RETRACTED` v6 that cites
+    everything the belief ever rested on and flagging exactly one of the two records. The
+    control record is the point of the section -- without it, "flag every action authorized on
+    this belief" and "flag everything" would pass the same check.
   - **The standing counter.** Three unverifiable claims about a *second* scratch entity, each
     refused at 0.00, driving `sre-infra-agent` to DEGRADED. This half writes **live registry
     state**, so it takes `scripts/verify_denial_by_registry.py`'s posture exactly: it refuses
@@ -51,7 +59,7 @@ from datetime import UTC, datetime, timedelta
 
 from google.cloud import firestore
 
-from provenance import beliefs, policy, registry
+from provenance import audit, beliefs, policy, registry
 
 ENTITY = "verify-belief-store"
 BELIEF_ID = f"belief-{ENTITY}"
@@ -76,6 +84,18 @@ FLIPPED_STATUS = "CLEARED"
 # The second scratch entity: no belief is ever written about it, because every claim made about
 # it weighs 0.00. It exists so the counter can be driven without touching the chain above.
 POISON_ENTITY = "verify-standing-counter"
+
+# Item 15's half. `DISPROVING` is the observation that retracts v5; `WEAK` is proposed and never
+# committed. The two authorization records are hand-written for the same reason item 14's
+# proposals were scripted: their real producer is `incident.py`, and what it cites comes from
+# `recall()`, which is item 16's -- so today every real record cites nothing. The control record
+# is what makes the check mean "every action authorized on *this* belief" rather than "every
+# action": if flagging ever widened to the whole ledger, only the control would notice.
+DISPROVING_ID = f"ev-{ENTITY}-disproving"
+WEAK_ID = f"ev-{ENTITY}-weak"
+OURS_SIGNATURE = f"ecdsa:{ENTITY}-rested-on-the-belief"
+CONTROL_SIGNATURE = f"ecdsa:{ENTITY}-rested-on-something-else"
+CONTROL_BELIEF_ID = "belief-verify-unrelated"
 
 
 class Failed(Exception):
@@ -138,6 +158,18 @@ async def refuse_if_dirty(client: firestore.AsyncClient) -> None:
     )
 
 
+async def refuse_if_ledger_is_dirty(client: firestore.AsyncClient) -> None:
+    """A leftover record would already carry a flag and make item 15's half pass vacuously."""
+    for signature in (OURS_SIGNATURE, CONTROL_SIGNATURE):
+        doc_id = audit.authorization_id(signature)
+        snapshot = await client.collection(audit.COLLECTION).document(doc_id).get()
+        if snapshot.exists:
+            raise Failed(
+                f"{audit.COLLECTION}/{doc_id} already exists. A previous run did not clean up; "
+                "remove it before re-running."
+            )
+
+
 async def refuse_if_agent_is_dirty(client: firestore.AsyncClient) -> None:
     """The standing half is only meaningful from a clean GOOD, and the restore has to be safe.
 
@@ -165,7 +197,7 @@ async def raw_version(client: firestore.AsyncClient, version: int) -> dict[str, 
 
 async def cleanup(client: firestore.AsyncClient) -> None:
     """Remove everything this run wrote. Runs on every exit path, including Ctrl-C."""
-    print("--> cleaning up: versions, evidence, root document")
+    print("--> cleaning up: versions, evidence, root document, ledger records")
     version = 1
     while await raw_version(client, version) is not None:
         await (
@@ -174,9 +206,13 @@ async def cleanup(client: firestore.AsyncClient) -> None:
             .delete()
         )
         version += 1
-    for evidence_id in (*EVIDENCE_IDS, AUDIT_ID, CLEARING_ID, REFUSED_ID):
+    for evidence_id in (*EVIDENCE_IDS, AUDIT_ID, CLEARING_ID, REFUSED_ID, DISPROVING_ID, WEAK_ID):
         await client.collection(beliefs.EVIDENCE_COLLECTION).document(evidence_id).delete()
     await client.collection(beliefs.COLLECTION).document(BELIEF_ID).delete()
+    for signature in (OURS_SIGNATURE, CONTROL_SIGNATURE):
+        await (
+            client.collection(audit.COLLECTION).document(audit.authorization_id(signature)).delete()
+        )
     # The registry half. A direct write because `registry.py` has one standing writer and no
     # un-append path at all -- undoing a rejection is a test fixture's job, never the product's.
     print("--> restoring the agent: standing GOOD, empty rejection window")
@@ -321,6 +357,7 @@ async def checks(client: firestore.AsyncClient) -> None:
     )
 
     await conflict_rule_checks(client, stored_v1, latest)
+    await retraction_checks(client, stored_v1, latest)
     await standing_counter_checks(client, latest)
 
 
@@ -433,6 +470,154 @@ async def conflict_rule_checks(
     )
 
 
+async def retraction_checks(
+    client: firestore.AsyncClient, stored_v1: dict[str, object] | None, latest: datetime
+) -> None:
+    """Item 15's verify line, and ARCHITECTURE §10's retraction row, against real Firestore.
+
+    §6.4 is three claims and this checks all three: a retraction needs evidence at least as
+    strong as the class that established the belief, it produces a `RETRACTED` version rather
+    than an overwrite, and it flags every action previously authorized on the belief.
+
+    The chain arrives here at v5/`CLEARED` resting on two source classes, the strongest being
+    `verified_system_observation` at 0.60. So `third_party_audit` (0.55) is over the 0.50 door
+    and still too weak to retract, which is the case that proves the class test is separate
+    arithmetic from the threshold.
+    """
+    await reinstate(client)
+    at = latest + timedelta(hours=1)
+
+    print("==> seeding two authorization records -- one rested on this belief, one did not")
+    for signature, belief_ids in (
+        (OURS_SIGNATURE, (BELIEF_ID,)),
+        (CONTROL_SIGNATURE, (CONTROL_BELIEF_ID,)),
+    ):
+        await audit.record(
+            agent_id="remediation-planner",
+            action_class="ROLLBACK_CONFIG",
+            target=ENTITY,
+            outcome="APPROVE",
+            subject=f"remediation-planner@v3|ROLLBACK_CONFIG|{ENTITY}",
+            signature=signature,
+            belief_ids=belief_ids,
+            now=at,
+            client=client,
+        )
+    ours = audit.authorization_id(OURS_SIGNATURE)
+    control = audit.authorization_id(CONTROL_SIGNATURE)
+    print(f"    ok  {ours} cites {BELIEF_ID}; {control} cites {CONTROL_BELIEF_ID}")
+
+    print("==> retracting on a weaker class -- over the 0.50 door, still refused")
+    weak = await policy.retract(
+        entity=ENTITY,
+        domain=DOMAIN,
+        evidence=[an_evidence(WEAK_ID, at, source_class="third_party_audit")],
+        agent_id=AGENT_ID,
+        now=at,
+        client=client,
+    )
+    print(f"    {weak.outcome}/{weak.reason} at {weak.confidence:.2f}")
+    check(
+        (weak.outcome, weak.reason) == ("REJECT", "RETRACTION_UNSUPPORTED"),
+        f"a weaker class was {weak.outcome}/{weak.reason}, expected REJECT/RETRACTION_UNSUPPORTED",
+    )
+    check(
+        weak.confidence > policy.NEW_BELIEF_THRESHOLD,
+        f"the weak proposal is at {weak.confidence:.2f}; it must clear 0.50 so that the class "
+        "rule is demonstrably what refused it, not the number",
+    )
+    check(await raw_version(client, 6) is None, "a refused retraction wrote v6")
+    weak_doc = (await client.collection(beliefs.EVIDENCE_COLLECTION).document(WEAK_ID).get()).exists
+    check(not weak_doc, f"{WEAK_ID} was written -- the refusal happened after the write")
+    check(
+        (await audit.read(ours, client=client)).flagged_by == (),
+        "a refused retraction flagged the ledger anyway",
+    )
+    print(
+        "    ok  no v6, no evidence document, no flag -- 0.55 is not 'at least as strong' as 0.60"
+    )
+
+    print("==> retracting on a class at least as strong -- §6.4's transition")
+    withdrawn = await policy.retract(
+        entity=ENTITY,
+        domain=DOMAIN,
+        evidence=[an_evidence(DISPROVING_ID, at)],
+        agent_id=AGENT_ID,
+        now=at,
+        client=client,
+    )
+    print(
+        f"    {withdrawn.outcome}/{withdrawn.reason} v{withdrawn.version} "
+        f"at {withdrawn.confidence:.2f}"
+    )
+    check(
+        (withdrawn.outcome, withdrawn.reason) == ("RETRACT", "ABOVE_THRESHOLD"),
+        f"the retraction was {withdrawn.outcome}/{withdrawn.reason}, expected RETRACT",
+    )
+    check(
+        abs(withdrawn.confidence - EXPECTED_CONFIDENCE) < 1e-9,
+        f"the retraction computed {withdrawn.confidence:.4f} over the disproving item alone, "
+        f"expected {EXPECTED_CONFIDENCE} -- over the accumulated set the door would be free",
+    )
+    stored_v6 = await raw_version(client, 6)
+    check(stored_v6 is not None, "the retraction committed but wrote no v6")
+    check(
+        stored_v6 is not None and stored_v6["status"] == policy.RETRACTED,
+        f"v6 stores status {stored_v6 and stored_v6.get('status')!r}, expected 'RETRACTED'",
+    )
+    check(
+        stored_v6 is not None
+        and abs(float(stored_v6["threshold"]) - policy.NEW_BELIEF_THRESHOLD) < 1e-9,
+        f"v6 stores threshold {stored_v6 and stored_v6.get('threshold')!r}, expected 0.50",
+    )
+    check(
+        stored_v6 is not None
+        and stored_v6["evidence"] == [*EVIDENCE_IDS, AUDIT_ID, CLEARING_ID, DISPROVING_ID],
+        f"v6 cites {stored_v6 and stored_v6.get('evidence')!r}, expected the accumulated set "
+        "plus the disproving item -- retraction subtracts nothing",
+    )
+    check(stored_v6 is not None and stored_v6["supersedes"] == 5, "v6 does not supersede v5")
+    check(await raw_version(client, 1) == stored_v1, "v1 changed when the belief was retracted")
+    print("    ok  v6 is RETRACTED at threshold 0.50, cites six items, and v1 is untouched")
+
+    print("==> the audit log: every action authorized on the retracted belief, and only those")
+    flagged = await audit.read(ours, client=client)
+    untouched = await audit.read(control, client=client)
+    check(
+        flagged.flagged_by
+        == ({"belief_id": BELIEF_ID, "version": 5, "flagged_at": at.strftime(audit.TIMESTAMP)},),
+        f"{ours} carries {flagged.flagged_by!r}, expected one mark naming {BELIEF_ID} at v5",
+    )
+    check(
+        untouched.flagged_by == (),
+        f"{control} was flagged too -- 'every action authorized on it' is not 'every action'",
+    )
+    print(f"    ok  {ours} is flagged for review at v5; {control} is untouched")
+
+    print("==> retracting again -- there is nothing left to withdraw")
+    again = await policy.retract(
+        entity=ENTITY,
+        domain=DOMAIN,
+        evidence=[an_evidence(f"{DISPROVING_ID}-2", at + timedelta(hours=1))],
+        agent_id=AGENT_ID,
+        now=at + timedelta(hours=1),
+        client=client,
+    )
+    check(
+        (again.outcome, again.reason) == ("REJECT", "NOTHING_TO_RETRACT"),
+        f"re-retracting was {again.outcome}/{again.reason}, expected REJECT/NOTHING_TO_RETRACT",
+    )
+    check(await raw_version(client, 7) is None, "re-retracting wrote v7")
+    window = (await registry.get_agent(AGENT_ID, client=client)).rejection_window
+    check(
+        [entry.reason for entry in window] == ["RETRACTION_UNSUPPORTED"],
+        f"the window holds {[e.reason for e in window]!r}; only the weak retraction should "
+        "count -- NOTHING_TO_RETRACT is about the store's state, not the agent's evidence",
+    )
+    print("    ok  REJECT/NOTHING_TO_RETRACT, no v7, and it cost the agent no standing")
+    await reinstate(client)
+
+
 async def standing_counter_checks(client: firestore.AsyncClient, latest: datetime) -> None:
     """§2.2 stage 6 and §10's Standing row, against the live registry record.
 
@@ -516,6 +701,7 @@ async def beliefs_absent(client: firestore.AsyncClient, entity: str) -> bool:
 async def run(project_id: str) -> int:
     client = firestore.AsyncClient(project=project_id)
     await refuse_if_dirty(client)
+    await refuse_if_ledger_is_dirty(client)
     await refuse_if_agent_is_dirty(client)
     try:
         await checks(client)
@@ -526,6 +712,8 @@ async def run(project_id: str) -> int:
         await cleanup(client)
     print(
         f"==> done. {BELIEF_ID} flipped on a different class, refused on the same one, "
+        f"was retracted on a class at least as strong and refused on a weaker one, "
+        f"the one action that rested on it was flagged and the one that did not was left alone, "
         f"{AGENT_ID} degraded and reinstated, and the scratch state is gone."
     )
     return 0

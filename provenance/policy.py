@@ -1,4 +1,4 @@
-"""The Memory Policy Engine — §2.2's pipeline, complete but for RETRACT (items 10, 12–14).
+"""The Memory Policy Engine — §2.2's pipeline, whole (items 10, 12–15).
 
 The mirror of the gateway: probabilistic recommends, deterministic decides, for beliefs as
 for actions (§1.1 property 2). Nothing here reasons. It reads standing, computes a number
@@ -8,7 +8,8 @@ Item 10 shipped this as a stub that could commit exactly one version and refused
 Item 12 gave it the versioned store (`beliefs.py`), so a re-affirmation now commits a real
 superseding version and `SUPERSESSION_UNSUPPORTED` is gone rather than merely unused. Item 13
 wired stage 3 and widened stage 4 to the accumulated evidence set (`docs/adr/ADR-017`). Item 14
-opened the flip door and wired stage 6's counter (`docs/adr/ADR-018`). What runs today:
+opened the flip door and wired stage 6's counter (`docs/adr/ADR-018`). Item 15 added §6.4's
+retraction as the second public door (`docs/adr/ADR-019`). What runs today:
 
 | §2.2 stage | Here |
 |---|---|
@@ -17,7 +18,7 @@ opened the flip door and wired stage 6's counter (`docs/adr/ADR-018`). What runs
 | 3. novelty check | `beliefs.novel()` over `(source_id, observed_at)`; nothing new is a REJECT |
 | 4. computed confidence | `confidence()`, §4.3's noisy-OR over the **accumulated** evidence |
 | 5. threshold + conflict rule | 0.50 for a new belief, 0.70 **plus** §6.3's class rule for a flip |
-| 6. outcome | COMMIT or REJECT, signed, one `belief.commit` span, counter written |
+| 6. outcome | COMMIT, RETRACT or REJECT, signed, one `belief.commit` span, counter written |
 
 **A status flip is two doors, not one.** §4.3 puts a flip behind 0.70 *and* §6.3 behind at
 least one evidence item of a `source_class` different from the class that established the
@@ -40,15 +41,34 @@ Without that, §6.3's legitimate-update case cannot reach the 0.70 door: an Aug-
 the new item counts. Novelty is what keeps the set honest — it can only ever grow by
 observations nobody has made before.
 
-Still absent by design: `RETRACT` (§6.4, item 15). A rejected write now increments the
-proposing agent's standing counter — but only the refusals that are statements about its
-evidence, see `COUNTED_REJECTIONS`.
+**A retraction is a third door, and §6.4 is the rule for it — not §6.3.** §6.3 hands the
+disproven case off explicitly ("*Disproven belief.* Retraction — see §6.4"), so a retraction
+does **not** face the different-source-class test. It faces §6.4's own: at least one
+disproving item whose `BASE_WEIGHT` is >= the strongest class the version in force rests on.
+The number it faces is `NEW_BELIEF_THRESHOLD`, computed over the **disproving evidence
+alone** — over the accumulated set any threshold would be free, since that set has already
+cleared one. At 0.50 the arithmetic says exactly what §6.4's bullet says: one
+`verified_system_observation` (0.60), `third_party_audit` (0.55) or `contractual_record`
+(0.50) can retract; `agent_inference` (0.15) and `unverified_external_claim` (0.00) cannot,
+and the poisoner fails on both rules rather than one.
+
+**Nothing subtracts.** The `RETRACTED` version cites the accumulated set *plus* the
+disproving items, and no class is ever removed from the set a later flip is measured
+against — so re-asserting a retracted status is an ordinary flip needing 0.70 and a class
+the whole chain does not already carry. This is what ADR-017's and ADR-018's revisit clauses
+asked and the answer is that the chain is only ever extended, retraction included.
+
+A rejected write now increments the proposing agent's standing counter — but only the
+refusals that are statements about its evidence, see `COUNTED_REJECTIONS`.
 
 Fail-closed (§7.3): a registry that cannot be read is a REJECT, not a commit; the store's
 write is a `create()` so a concurrent one loses rather than clobbers; and every outcome,
 including every refusal, lands on a span. `commit()` never raises for a belief it declined
 to write — the caller must not be able to swallow a refusal into "nothing happened", the
-same reason `gateway.authorize()` returns every terminal outcome as a `Decision`.
+same reason `gateway.authorize()` returns every terminal outcome as a `Decision`. A
+retraction flags the audit ledger *before* it appends its version, so a ledger that cannot
+be written is a REJECT with no version: a retraction whose actions were never flagged is the
+exact failure §6.4 exists to prevent, and it must not look like a success.
 """
 
 from __future__ import annotations
@@ -64,7 +84,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from services.gateway import signing
 
-from provenance import beliefs, registry, telemetry
+from provenance import audit, beliefs, registry, telemetry
 from provenance.beliefs import TIMESTAMP, Evidence
 from provenance.telemetry import BeliefOutcome, SourceClass, Standing
 
@@ -92,6 +112,8 @@ ON_EXPIRY = "REVERIFY"
 # Which of the two a proposal is judged against is decided by one thing — whether its status
 # differs from the version in force — and the number it faced is stored on the version and
 # emitted on the span, so a refusal says which door it was.
+# §6.4's retraction faces NEW_BELIEF_THRESHOLD too, but over the disproving evidence alone
+# rather than the accumulated set — which is why it is a door at all. See `retract()`.
 NEW_BELIEF_THRESHOLD = 0.50
 FLIP_THRESHOLD = 0.70
 
@@ -105,19 +127,28 @@ CommitReason = Literal[
     "REGISTRY_UNAVAILABLE",
     "NO_NEW_EVIDENCE",
     "FLIP_UNSUPPORTED",
+    "RETRACTION_UNSUPPORTED",
+    "NOTHING_TO_RETRACT",
     "VERSION_CONFLICT",
     "STORE_UNAVAILABLE",
 ]
 
+# §3.2: "domain-typed; UNKNOWN and RETRACTED are universal". The one status this module
+# writes by name — every other status is the caller's word for what its domain believes.
+RETRACTED = "RETRACTED"
+
 # §2.2 stage 6 increments the standing counter on a REJECT, and §3.4 narrows which ones:
-# "three rejected memory writes **lacking verifiable evidence**". These three are the
+# "three rejected memory writes **lacking verifiable evidence**". These four are the
 # refusals that are statements about the proposing agent's evidence. The rest are not its
 # fault — an unreadable registry, an unreadable store and a lost `create()` race are
 # infrastructure, and degrading an agent for a Firestore outage would be a bug wearing a
 # security guarantee's clothes. STANDING_NOT_GOOD and DOMAIN_NOT_HELD are already-refused
 # authority; counting them would only re-degrade an agent that is degraded.
+# authority. NOTHING_TO_RETRACT is a statement about the store's state rather than about the
+# agent's evidence — retracting a belief that is not there is a mistake, but it is not the
+# kind §3.4 counts, and counting it would let a typo degrade an agent.
 COUNTED_REJECTIONS: frozenset[CommitReason] = frozenset(
-    {"BELOW_THRESHOLD", "FLIP_UNSUPPORTED", "NO_NEW_EVIDENCE"}
+    {"BELOW_THRESHOLD", "FLIP_UNSUPPORTED", "RETRACTION_UNSUPPORTED", "NO_NEW_EVIDENCE"}
 )
 
 
@@ -272,8 +303,80 @@ async def commit(
         now=now,
         client=client,
     )
+    return await _finish(
+        verdict,
+        belief_id=belief_id,
+        entity=entity,
+        domain=domain,
+        status=status,
+        evidence=evidence,
+        agent_id=agent_id,
+        now=now,
+        client=client,
+    )
 
-    # §2.2 stage 6, the half that is not the span: a rejection whose cause is the agent's own
+
+async def retract(
+    *,
+    entity: str,
+    domain: str,
+    evidence: Sequence[Evidence],
+    agent_id: str,
+    now: datetime,
+    client: Any | None = None,
+) -> BeliefCommit:
+    """§6.4: retract a belief that turned out to be wrong. The second door, not a status.
+
+    There is no `status` parameter because there is no choice to make — a retraction writes
+    `RETRACTED` (§3.2: "UNKNOWN and RETRACTED are universal"). What the caller supplies is
+    the *disproving* evidence, and §6.4's gate is a statement about it: at least one item
+    whose source class is at least as strong as the strongest class the version in force
+    rests on. §6.3's different-class rule does not apply — §6.3 hands this case to §6.4.
+
+    Every stage before that is shared with `commit()` verbatim, novelty included: a belief
+    cannot be retracted by re-citing the evidence that established it.
+
+    Returns a signed outcome; a REJECT is not an error, exactly as `commit()`'s is not.
+    """
+    belief_id = f"belief-{entity}"
+    verdict = await _decide(
+        belief_id=belief_id,
+        entity=entity,
+        domain=domain,
+        status=RETRACTED,
+        evidence=evidence,
+        agent_id=agent_id,
+        now=now,
+        client=client,
+        retracting=True,
+    )
+    return await _finish(
+        verdict,
+        belief_id=belief_id,
+        entity=entity,
+        domain=domain,
+        status=RETRACTED,
+        evidence=evidence,
+        agent_id=agent_id,
+        now=now,
+        client=client,
+    )
+
+
+async def _finish(
+    verdict: _Verdict,
+    *,
+    belief_id: str,
+    entity: str,
+    domain: str,
+    status: str,
+    evidence: Sequence[Evidence],
+    agent_id: str,
+    now: datetime,
+    client: Any | None,
+) -> BeliefCommit:
+    """§2.2 stage 6, shared by both doors: the counter, the signature and the one span."""
+    # The half that is not the span: a rejection whose cause is the agent's own
     # evidence increments its standing counter, and the third inside §3.4's window degrades it.
     if verdict.agent is not None and verdict.reason in COUNTED_REJECTIONS:
         # ponytail: best-effort. Nothing was committed either way, so a registry that cannot be
@@ -319,6 +422,11 @@ def _standing(agent: registry.Agent | None) -> Standing:
     return "SUSPENDED" if agent is None else agent.standing
 
 
+def _strength(evidence: Sequence[Evidence]) -> float:
+    """The strongest source class present, by §4.3's published base weight. Zero if empty."""
+    return max((BASE_WEIGHT[item.source_class] for item in evidence), default=0.0)
+
+
 async def _decide(
     *,
     belief_id: str,
@@ -329,6 +437,7 @@ async def _decide(
     agent_id: str,
     now: datetime,
     client: Any | None,
+    retracting: bool = False,
 ) -> _Verdict:
     """§2.2's stages, in order. The earliest refusal wins, and the write happens last.
 
@@ -336,6 +445,9 @@ async def _decide(
     and no `supersedes`: an agent whose standing has not been checked does not get a read of
     institutional memory performed on its behalf, and the span's `decision.reason` says
     plainly that the write never reached the store.
+
+    `retracting` swaps §6.4's gate in for §6.3's at stages 4 and 5 and nothing else — stages
+    2 and 3 are identical for both doors, which is the point of one pipeline rather than two.
     """
     # Stage 2 — the registry, read at request time (§1.1 property 4). A DEGRADED agent's
     # memory writes are rejected outright (§3.4); an unreadable registry is the same answer,
@@ -361,6 +473,13 @@ async def _decide(
     version = 1 if previous is None else previous.version + 1
     supersedes = None if previous is None else previous.version
 
+    # §6.4 retracts "a belief committed in good faith that turns out to be wrong", so there
+    # has to be one. An absent belief and an already-retracted one are the same answer: there
+    # is nothing here to withdraw. Not counted against the agent — this is a statement about
+    # the store's state, not about the evidence it brought (§3.4).
+    if retracting and (previous is None or previous.status == RETRACTED):
+        return _Verdict("REJECT", "NOTHING_TO_RETRACT", 0.0, agent, version, supersedes)
+
     # Stage 3 — §2.2's novelty check, mechanical. It compares `(source_id, observed_at)`
     # against what this belief already rests on, and nothing here reasons about the evidence
     # or its plausibility. An id no document answers raises rather than reading as absent:
@@ -380,17 +499,22 @@ async def _decide(
         return _Verdict("REJECT", "NO_NEW_EVIDENCE", 0.0, agent, version, supersedes)
 
     # Stage 4 — the number is computed here and nowhere else (§4.1, §4.4). Whatever the
-    # Analyst may have asserted is not a parameter of this function. It is computed over the
-    # **accumulated** set (§3.2), so corroboration works across time: an old contractual
-    # record and a fresh audit are two distinct source classes even though they arrived a
-    # fortnight apart, and `confidence()`'s per-class max is what "re-confirmation raises
-    # confidence via decay-reset" means in arithmetic.
-    conf = confidence((*known, *new), now=now)
+    # Analyst may have asserted is not a parameter of this function. For a commit it is
+    # computed over the **accumulated** set (§3.2), so corroboration works across time: an old
+    # contractual record and a fresh audit are two distinct source classes even though they
+    # arrived a fortnight apart, and `confidence()`'s per-class max is what "re-confirmation
+    # raises confidence via decay-reset" means in arithmetic.
+    #
+    # A retraction is measured over the **disproving items alone**, and that is what makes its
+    # door a door: over the accumulated set any threshold is free, since that set has already
+    # cleared one. What §6.4 asks is how strong the case *against* the belief is.
+    conf = confidence(new if retracting else (*known, *new), now=now)
 
-    # Stage 5 — §4.3's two thresholds and §6.3's conflict rule. Which door this proposal faces
-    # is decided by one fact, and it is not a judgment: does the claimed status differ from the
-    # one in force? A first belief has nothing to contradict, so it is never a flip.
-    flip = previous is not None and previous.status != status
+    # Stage 5 — §4.3's thresholds and the conflict rule for whichever door this is. Which one
+    # a proposal faces is decided by facts, not judgment: a retraction faces §6.4, a claimed
+    # status differing from the one in force faces §6.3, and a first belief has nothing to
+    # contradict so it is never a flip.
+    flip = not retracting and previous is not None and previous.status != status
     threshold = FLIP_THRESHOLD if flip else NEW_BELIEF_THRESHOLD
     if conf < threshold:
         return _Verdict(
@@ -406,7 +530,40 @@ async def _decide(
             "REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes, len(new), threshold
         )
 
+    # §6.4: a retraction "requires evidence of a source class **at least as strong** as the
+    # class that established the belief". The baseline is the strongest class the version in
+    # force rests on — its accumulated set, the same reading item 14 gave §6.3's near-identical
+    # phrase, and free because stage 3 already resolved it. Published `BASE_WEIGHT`, not the
+    # decayed weight: §6.4 compares classes, and a rule that changed answer with the clock
+    # would let a belief become unretractable by nothing but sitting there.
+    if retracting and _strength(new) < _strength(known):
+        return _Verdict(
+            "REJECT",
+            "RETRACTION_UNSUPPORTED",
+            conf,
+            agent,
+            version,
+            supersedes,
+            len(new),
+            threshold,
+        )
+
+    # §6.4's third bullet, and it happens **before** the version is appended. `beliefs.append()`
+    # orders its writes on the same principle: a flag pointing at a retraction that never
+    # landed is a false alarm a human reviews and dismisses, while a retraction whose actions
+    # were never flagged is a decision resting on a wrong thing that nobody knows about — the
+    # exact failure §6.4 exists to prevent. So the flag goes first and its failure is a REJECT.
+    if retracting:
+        assert previous is not None  # the NOTHING_TO_RETRACT guard above routes here only if so
+        try:
+            await audit.flag(belief_id, version=previous.version, now=now, client=client)
+        except audit.AuditError:
+            return _Verdict(
+                "REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes, len(new), threshold
+            )
+
     committed_at = now.astimezone(UTC).strftime(TIMESTAMP)
+    outcome: BeliefOutcome = "RETRACT" if retracting else "COMMIT"
     proposed = beliefs.BeliefVersion(
         belief_id=belief_id,
         version=version,
@@ -420,7 +577,7 @@ async def _decide(
         authority=f"{agent.id}@{agent.version} (standing: {agent.standing})",
         committed_at=committed_at,
         committed_by="memory-policy-engine",
-        signature=_sign(belief_id, version, "COMMIT", "ABOVE_THRESHOLD", conf).signature,
+        signature=_sign(belief_id, version, outcome, "ABOVE_THRESHOLD", conf).signature,
         supersedes=supersedes,
         half_life_days=HALF_LIFE_DAYS,
         expires_at=(now + timedelta(days=HALF_LIFE_DAYS)).astimezone(UTC).strftime(TIMESTAMP),
@@ -441,5 +598,5 @@ async def _decide(
             "REJECT", "STORE_UNAVAILABLE", conf, agent, version, supersedes, len(new), threshold
         )
     return _Verdict(
-        "COMMIT", "ABOVE_THRESHOLD", conf, agent, version, supersedes, len(new), threshold
+        outcome, "ABOVE_THRESHOLD", conf, agent, version, supersedes, len(new), threshold
     )
