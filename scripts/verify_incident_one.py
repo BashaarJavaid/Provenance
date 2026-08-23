@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check ROADMAP items 9, 10, 11 and 11.5's `verify:` lines against real GCP and real models.
+"""Check ROADMAP items 9, 10, 11, 11.5 and 18's `verify:` lines against real GCP and models.
 
     PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" \
     GOOGLE_CLOUD_PROJECT=provenance-hackathon \
@@ -16,6 +16,21 @@ what `--runs 10` is for. Each run injects and restores around itself, because th
 what deletes the belief a second run would otherwise be refused for superseding, and the loop
 finishes all ten even after a failure: one bad run in ten and seven in ten are different
 findings, and both defects item 11.5 fixed were intermittent.
+
+Item 18's: "the recall event appears in the trace before the domain agent's first hypothesis"
+-- which is what `--remember` is for. It runs the same deviation twice without deleting the
+belief in between, so incident #2 wakes with v1 already in memory. One `refuse_if_dirty` and
+one `restore` span both runs, deliberately: the belief surviving between them *is* the item,
+so the teardown cannot sit inside either one. Between the runs `restore_service()` puts the
+spiked v42 fixture back without touching memory -- `inject()` alone cannot, because it never
+writes `current_config_version`, which run 1's rollback moved to v41.
+
+Item 18 adds no code under `provenance/` and no sixth span shape. Recall already resolves in
+`run_incident()` before `build_graph()`, so the first reasoning span the graph opens already
+carries the recalled belief and opened before the domain agent's did -- a stronger fact than
+the line asks for, and one the existing five shapes already record. What it does *not* claim
+is that memory caused the config-regression hypothesis: the SRE prompt has carried its own
+hint since item 9, and item 32's `--memory-disabled` A/B is what measures causation.
 
 Four real Gemini calls sit between the trigger and the belief, so the point of this script is
 that the *deterministic* half holds whatever the models say: the tool registry and entity model
@@ -122,6 +137,26 @@ def inject(client: firestore.Client) -> None:
     client.collection("fault_injection").document(TARGET).update({"error_rate_spike": True})
 
 
+def restore_service(client: firestore.Client) -> None:
+    """The service fixture and the switch — everything the fleet moved *except* memory.
+
+    Split out of `restore()` for item 18. Between incident #1 and incident #2 the fault has to
+    be re-injected while the belief survives, and `inject()` alone cannot do it: it writes
+    `error_rate` and `healthy` but not `current_config_version`, which run 1's rollback moved
+    to v41. Calling this and then `inject()` is what puts the fixture back to "a bad v42 is
+    deployed and the error rate is spiked" — the same deviation, a second time.
+    """
+    service = company.service(TARGET)
+    client.collection("services").document(TARGET).update(
+        {
+            "error_rate": service.error_rate,
+            "healthy": service.healthy,
+            "current_config_version": service.current_config_version,
+        }
+    )
+    client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
+
+
 def restore(client: firestore.Client) -> None:
     """Put back every field this run could have moved, from the in-code fixture, not from memory.
 
@@ -138,15 +173,7 @@ def restore(client: firestore.Client) -> None:
     the `evidence/{id}` documents those versions cite, and the root document. Item 15 added the
     authorization ledger, so an approved rollback now leaves a record behind as well.
     """
-    service = company.service(TARGET)
-    client.collection("services").document(TARGET).update(
-        {
-            "error_rate": service.error_rate,
-            "healthy": service.healthy,
-            "current_config_version": service.current_config_version,
-        }
-    )
-    client.collection("fault_injection").document(TARGET).update({"error_rate_spike": False})
+    restore_service(client)
     delete_belief(client)
     delete_authorizations(client)
 
@@ -223,8 +250,15 @@ def refuse_if_dirty(client: firestore.Client) -> bool:
     return False
 
 
-def check_result(result: incident.IncidentResult) -> int:
-    """The decision half of the `verify:` line. Returns the number of failed checks."""
+def check_result(result: incident.IncidentResult, *, expect_version: int = 1) -> int:
+    """The decision half of the `verify:` line. Returns the number of failed checks.
+
+    `expect_version` is item 18's one addition: incident #2 runs against a store that already
+    holds v1, so its belief is a superseding v2 rather than a first commit. The confidence is
+    the *same* 0.60 either way — same status, same source class, and §4.3 collapses a class to
+    its least-decayed item — so the version is the only thing that says the write landed on
+    top of memory rather than in place of it.
+    """
     failures = 0
 
     def fail(message: str) -> None:
@@ -302,6 +336,8 @@ def check_result(result: incident.IncidentResult) -> int:
         # Not "roughly right": §4.3 is a published formula over one fresh observation, so the
         # only honest expectation is the exact number it produces.
         fail(f"confidence is {result.belief.confidence}, expected {EXPECTED_CONFIDENCE}")
+    if result.belief.version != expect_version:
+        fail(f"the belief is v{result.belief.version}, expected v{expect_version}")
     try:
         policy.verify_commit(result.belief, policy.public_key_pem())
     except policy.CommitInvalid as exc:
@@ -334,38 +370,37 @@ def check_post_state(client: firestore.Client) -> int:
     return failures
 
 
-async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple[int, str, Any]:
-    """Inject, wake the fleet, restore. Returns (failures, trace id, result)."""
-    sync_client = firestore.Client(project=project_id)
-    async_client = firestore.AsyncClient(project=project_id)
+async def _one_incident(
+    sync_client: firestore.Client,
+    async_client: Any,
+    private_key: ec.EllipticCurvePrivateKey,
+    *,
+    expect_version: int = 1,
+) -> tuple[int, str, Any]:
+    """Inject, wake the fleet, read the store back. Returns (failures, trace id, result).
 
-    if refuse_if_dirty(sync_client):
-        return 1, "", None
-
+    Deliberately owns neither the dirty check nor the teardown. `run()` wraps one of these in
+    both, exactly as before; item 18's `run_pair()` wraps *two* in one `refuse_if_dirty` and
+    one `restore`, because what that item proves is the belief surviving between them.
+    """
     tracer = trace.get_tracer("provenance.verify_incident_one")
     with tracer.start_as_current_span("provenance.verify_incident_one") as root:
         trace_id = format(root.get_span_context().trace_id, "032x")
         print(f"--> injecting the fault: {TARGET} error_rate -> {SPIKED_ERROR_RATE}")
         inject(sync_client)
-        try:
-            result = await incident.run_incident(
-                incident.Trigger(
-                    target=TARGET,
-                    signal="error_rate",
-                    observed_value=SPIKED_ERROR_RATE,
-                    observed_at=OBSERVED_AT,
-                ),
-                client=async_client,
-                planner_key=private_key,
-            )
-            # Read the store *before* the restore puts v42 back: this is the only window in
-            # which the rolled-back state exists, and it is half the `verify:` line.
-            post_failures = check_post_state(sync_client)
-        finally:
-            # Any exit path, including an exception or a Ctrl-C mid-incident (item 8). Item 10
-            # widened it: the fleet now writes three service fields and a belief.
-            print("--> restoring: v42, nominal error rate, fault off, belief deleted")
-            restore(sync_client)
+        result = await incident.run_incident(
+            incident.Trigger(
+                target=TARGET,
+                signal="error_rate",
+                observed_value=SPIKED_ERROR_RATE,
+                observed_at=OBSERVED_AT,
+            ),
+            client=async_client,
+            planner_key=private_key,
+        )
+        # Read the store *before* any restore puts v42 back: this is the only window in
+        # which the rolled-back state exists, and it is half the `verify:` line.
+        post_failures = check_post_state(sync_client)
 
     print(f"    incident {result.incident_id} -> {result.outcome}")
     if result.action is not None:
@@ -389,7 +424,89 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
             f"    belief    {result.belief.belief_id} v{result.belief.version} "
             f"{result.belief.outcome} at confidence {result.belief.confidence:.2f}"
         )
-    return check_result(result) + post_failures, trace_id, result
+    return check_result(result, expect_version=expect_version) + post_failures, trace_id, result
+
+
+async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple[int, str, Any]:
+    """One incident, with the dirty check and the teardown around it. Items 9, 10, 11, 11.5."""
+    sync_client = firestore.Client(project=project_id)
+    async_client = firestore.AsyncClient(project=project_id)
+
+    if refuse_if_dirty(sync_client):
+        return 1, "", None
+    try:
+        return await _one_incident(sync_client, async_client, private_key)
+    finally:
+        # Any exit path, including an exception or a Ctrl-C mid-incident (item 8). Item 10
+        # widened it: the fleet now writes three service fields and a belief.
+        print("--> restoring: v42, nominal error rate, fault off, belief deleted")
+        restore(sync_client)
+
+
+async def run_pair(
+    project_id: str, private_key: ec.EllipticCurvePrivateKey
+) -> tuple[int, str, Any]:
+    """Item 18: incident #1 cold, then incident #2 with v1 already in memory.
+
+    One `refuse_if_dirty` and one `restore` across both runs, and that is the whole point —
+    between them the service fixture goes back to a spiked v42 while `belief-inventory-api`
+    and the first run's ledger record are deliberately left standing. The single outer
+    `finally` is why this is not two `run()` calls: if run 2 raises, run 1's belief still has
+    to be torn down, and `seed_firestore.py` skips existing documents so nothing else puts the
+    baseline back.
+
+    Returns run 2's (failures, trace id, result) with run 1's failures folded in — run 2's
+    trace is the one the item's assertions live on.
+    """
+    sync_client = firestore.Client(project=project_id)
+    async_client = firestore.AsyncClient(project=project_id)
+
+    if refuse_if_dirty(sync_client):
+        return 1, "", None
+    failures = 0
+    try:
+        print("\n=== incident #1: a cold case, no memory " + "=" * 32)
+        first, _, _ = await _one_incident(sync_client, async_client, private_key)
+        failures += first
+
+        # Not `restore()`: the belief and the ledger record survive into the next incident.
+        print("\n--> re-injecting the same deviation, leaving memory in place")
+        restore_service(sync_client)
+
+        print("\n=== incident #2: the fleet remembers " + "=" * 35)
+        second, trace_id, result = await _one_incident(
+            sync_client, async_client, private_key, expect_version=2
+        )
+        failures += second
+        # Read before the teardown deletes both records.
+        failures += check_ledger_contrast(sync_client)
+    finally:
+        print("\n--> restoring: v42, nominal error rate, fault off, belief and ledger deleted")
+        restore(sync_client)
+    return failures, trace_id, result
+
+
+def check_ledger_contrast(client: firestore.Client) -> int:
+    """§6.4's ledger, before and after memory existed — the half that lives in stored state.
+
+    Incident #1 cites nothing because there was nothing to cite; incident #2 cites the belief
+    #1 wrote. Asserting *both* is what makes this evidence: "some record cites the belief"
+    would pass on a fleet that cited it every time, which is what a broken cold case looks
+    like. `belief_ids` holds entity ids only (§6.2), so a class belief could never appear here.
+    """
+    failures = 0
+    records = [snapshot.to_dict() or {} for snapshot in authorizations_for_target(client)]
+    cited = sorted((list(record.get("belief_ids", [])) for record in records), key=len)
+    if cited != [[], [BELIEF_ID]]:
+        print(
+            f"FAIL: the ledger cites {cited}, expected [] from the cold incident and "
+            f"[{BELIEF_ID!r}] from the one that remembered",
+            file=sys.stderr,
+        )
+        failures += 1
+    else:
+        print(f"    ok  ledger          cold incident cites [], second cites [{BELIEF_ID}]")
+    return failures
 
 
 def read_back(project_id: str, trace_id: str) -> list[Any]:
@@ -426,9 +543,74 @@ def attribute(labels: dict[str, str], attr: str) -> str | None:
     return labels.get(f"/{attr}") or labels.get(attr)
 
 
-def check_spans(spans: list[Any], result: Any) -> int:
+def check_recall_precedes_diagnosis(spans: list[Any]) -> int:
+    """Item 18's `verify:` line, settled on the Cloud Trace record.
+
+    Takes the raw spans rather than `check_spans`'s `by_name` mapping, because that mapping
+    keeps labels and throws the timestamps away — and a timestamp is the entire claim.
+
+    There is no dedicated recall span and deliberately no sixth shape (§8.1 has five, and
+    every one of them was added with the module and the tests in one commit). Recall resolves
+    in `run_incident()` *before* `build_graph()`, so what the trace can show is stronger than
+    the line asks for: the very first reasoning span already carries the recalled belief, and
+    it opened before the domain agent's did. An attribute set at span-open time on a span that
+    started earlier is not a weaker fact than an event — it is the same fact, without a shape.
+
+    The third check is the line's second clause. It is a FAIL and not a WARN: incident #1
+    reaches config_regression on every observed run, so a fleet that recalled
+    CONFIG_REGRESSION_PRONE and then diagnosed something else is a finding, not noise. It does
+    **not** claim memory *caused* the choice — the SRE prompt carries its own config-regression
+    hint and always has. Item 32's `--memory-disabled` A/B is what measures causation.
+    """
+    failures = 0
+
+    def fail(message: str) -> None:
+        nonlocal failures
+        print(f"FAIL: {message}", file=sys.stderr)
+        failures += 1
+
+    by_step = {
+        step: span
+        for span in spans
+        if span.name == telemetry.SPAN_REASONING_CHAIN
+        and (step := attribute(dict(span.labels), telemetry.ATTR_REASONING_STEP)) is not None
+    }
+    classification = by_step.get("classification")
+    diagnosis = by_step.get("diagnosis")
+    if classification is None or diagnosis is None:
+        fail(f"the trace has reasoning steps {sorted(by_step)}, expected both of the first two")
+        return failures
+
+    recalled = attribute(dict(classification.labels), telemetry.ATTR_RECALL_BELIEF_IDS) or ""
+    if BELIEF_ID not in recalled:
+        fail(f"the classification span recalled {recalled!r}, expected it to carry {BELIEF_ID}")
+    elif not classification.start_time < diagnosis.start_time:
+        fail(
+            f"the classification span started at {classification.start_time}, not before the "
+            f"diagnosis span at {diagnosis.start_time}"
+        )
+    else:
+        print(f"    ok  recall order    classification({BELIEF_ID}) before diagnosis")
+
+    chosen = attribute(dict(diagnosis.labels), telemetry.ATTR_REASONING_SELECTED_HYPOTHESIS) or ""
+    if "config" not in chosen.lower():
+        fail(f"the diagnosis selected {chosen!r}, which does not name a config regression")
+    else:
+        print(f"    ok  hypothesis      {chosen}")
+    return failures
+
+
+def check_spans(
+    spans: list[Any],
+    result: Any,
+    *,
+    expect_supersedes: str | None = None,
+    expect_recall: bool = False,
+) -> int:
     """What actually landed in Cloud Trace, which is where the `verify:` line is settled."""
     failures = 0
+    if expect_recall:
+        failures += check_recall_precedes_diagnosis(spans)
 
     def fail(message: str) -> None:
         nonlocal failures
@@ -501,12 +683,15 @@ def check_spans(spans: list[Any], result: Any) -> int:
             f"    ok  decision span   APPROVE  risk {' + '.join(str(n) for n in numbers)} = {total}"
         )
 
-    failures += check_learning_spans(by_name, incidents)
+    failures += check_learning_spans(by_name, incidents, expect_supersedes=expect_supersedes)
     return failures
 
 
 def check_learning_spans(
-    by_name: dict[str, list[dict[str, str]]], incidents: list[dict[str, str]]
+    by_name: dict[str, list[dict[str, str]]],
+    incidents: list[dict[str, str]],
+    *,
+    expect_supersedes: str | None = None,
 ) -> int:
     """Item 10's two spans: what verification concluded, and what memory did about it.
 
@@ -558,13 +743,17 @@ def check_learning_spans(
         fail(f"the belief span's confidence is {confidence}, expected {EXPECTED_CONFIDENCE}")
     elif not attribute(labels, telemetry.ATTR_DECISION_SIGNATURE):
         fail("the belief.commit span carries no signature")
-    elif attribute(labels, telemetry.ATTR_BELIEF_SUPERSEDES) is not None:
-        # A first belief supersedes nothing, and the stub cannot write the link a v2 needs.
-        fail("a first belief carries a supersedes attribute")
+    elif attribute(labels, telemetry.ATTR_BELIEF_SUPERSEDES) != expect_supersedes:
+        # A first belief supersedes nothing. Item 18's second incident supersedes v1, and the
+        # span carrying that link is what says the write landed on top of memory rather than
+        # in place of it — the confidence is 0.60 either way (§4.3, same class collapses).
+        got = attribute(labels, telemetry.ATTR_BELIEF_SUPERSEDES)
+        fail(f"the belief span's supersedes is {got}, expected {expect_supersedes}")
     else:
         print(
             f"    ok  belief span     COMMIT  {attribute(labels, telemetry.ATTR_BELIEF_ID)} "
             f"at confidence {confidence}"
+            + (f", superseding v{expect_supersedes}" if expect_supersedes else "")
         )
     return failures
 
@@ -768,6 +957,48 @@ def check_deployed_trace(url: str, outcome: str) -> int:
     return failures
 
 
+def run_remembered(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> int:
+    """Item 18 end to end: the pair of incidents, then run 2's trace read back.
+
+    Run 2's trace only, for item 11.5's reason: each read-back polls up to four minutes, and
+    every assertion this item adds lives on the second incident. Run 1's span shapes are what
+    every other invocation of this script already proves.
+
+    The deployed `/trigger` half is skipped. It runs its own refuse/inject/restore against the
+    same live documents, and teaching it to keep a belief between two remote incidents would
+    double the surface that can strand the demo fixture -- for nothing item 11 has not shown.
+    """
+    failures, trace_id, result = asyncio.run(run_pair(project_id, private_key))
+    if not trace_id:
+        return 1
+
+    provider = trace.get_tracer_provider()
+    provider.force_flush()  # type: ignore[attr-defined]
+
+    print(f"\n--> reading trace {trace_id} back from Cloud Trace (indexing takes a minute or two)")
+    spans = read_back(project_id, trace_id)
+    url = f"https://console.cloud.google.com/traces/list?project={project_id}&tid={trace_id}"
+    if not spans:
+        print("FAIL: the second incident's spans never reached Cloud Trace", file=sys.stderr)
+        print(url, file=sys.stderr)
+        return 1
+    failures += check_spans(spans, result, expect_supersedes="1", expect_recall=True)
+    print("--> SKIPPED the deployed /trigger check (--remember runs locally only)")
+
+    if failures:
+        print(f"\n{failures} check(s) failed.\n{url}", file=sys.stderr)
+        return 1
+    print(
+        "\n--> the same deviation twice: the first incident recalled nothing and cited nothing,"
+        "\n    the second opened its very first reasoning span already carrying"
+        f"\n    {BELIEF_ID} — before the domain agent had a hypothesis — and superseded it to"
+        "\n    v2. Still 0.60: same status, same source class, and §4.3 collapses a class to"
+        "\n    its least-decayed item. Memory accumulated evidence, not certainty."
+    )
+    print(f"    {url}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -781,9 +1012,21 @@ def main() -> int:
             "deletes the belief a second run would otherwise be refused for superseding."
         ),
     )
+    parser.add_argument(
+        "--remember",
+        action="store_true",
+        help=(
+            "item 18: run incident #1 cold and then incident #2 with v1 already in memory. "
+            "Implies exactly two runs, and does not compose with --runs -- the item's "
+            "assertions describe a v2, and a third run would supersede to v3."
+        ),
+    )
     args = parser.parse_args()
     if args.runs < 1:
         print("--runs must be at least 1.", file=sys.stderr)
+        return 1
+    if args.remember and args.runs != 1:
+        print("--remember runs exactly two incidents; it does not take --runs.", file=sys.stderr)
         return 1
 
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -806,6 +1049,8 @@ def main() -> int:
     failures = 0
     resolved = 0
     predicates: list[str] = []
+    if args.remember:
+        return run_remembered(project_id, private_key)
     for attempt in range(1, args.runs + 1):
         if args.runs > 1:
             print(f"\n=== run {attempt}/{args.runs} " + "=" * 48)
