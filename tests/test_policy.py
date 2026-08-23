@@ -204,6 +204,92 @@ def test_age_decay_is_monotonic() -> None:
     assert values[-1] < 0.001, "a decade on, the observation is worth all but nothing"
 
 
+# --- §4.3's arithmetic, published (item 17) ------------------------------------------------
+
+
+def test_the_contributions_are_exactly_what_confidence_multiplies() -> None:
+    """The whole reason `contributions()` exists: one implementation of §4.3, not two.
+
+    Item 17's inspector renders these rows beside the number they produce. If the breakdown
+    were computed anywhere else — in the route, in the browser — it could disagree with the
+    figure the Policy Engine actually decided with, and an audit trail that disagrees with
+    the decision is worse than none. Checked over a table, because a single case can be
+    satisfied by a coincidence.
+    """
+    stale = (NOW - timedelta(days=45)).strftime(policy.TIMESTAMP)
+    for evidence in (
+        [],
+        [an_evidence()],
+        [an_evidence(), an_evidence(id="ev-2")],
+        [an_evidence(), an_evidence(id="ev-2", source_class="third_party_audit")],
+        [an_evidence(observed_at=stale), an_evidence(id="ev-2", source_class="agent_inference")],
+        [an_evidence(id="ev-x", source_class="unverified_external_claim")],
+    ):
+        product = 1.0
+        for row in policy.contributions(evidence, now=NOW):
+            product *= 1 - row.weight
+        assert 1 - product == pytest.approx(policy.confidence(evidence, now=NOW))
+
+
+def test_a_restatement_collapses_to_one_row_and_it_is_the_freshest() -> None:
+    """One row per *distinct* class, the least decayed item of each — §4.3's `max`, rendered.
+
+    A breakdown with one row per evidence *item* would show a belief as resting on five
+    corroborating sources when it rests on one dial read five times, which is the exact
+    picture §6.3 exists to prevent anyone from being shown.
+    """
+    older = an_evidence(
+        id="ev-old", observed_at=(NOW - timedelta(days=30)).strftime(policy.TIMESTAMP)
+    )
+    # Both orderings, because "the strongest of the class wins" and "the last one seen wins"
+    # agree on any single ordering and disagree on the pair. Evidence arrives in whatever
+    # order a caller assembled it, so only the pair pins the rule.
+    for evidence in ([older, an_evidence()], [an_evidence(), older]):
+        rows = policy.contributions(evidence, now=NOW)
+        assert len(rows) == 1
+        assert rows[0].source_class == "verified_system_observation"
+        assert rows[0].base == pytest.approx(0.60)
+        assert rows[0].age_days == pytest.approx(0.0), "the fresher item is the one that counts"
+        assert rows[0].weight == pytest.approx(0.60)
+
+
+def test_every_row_carries_the_published_base_weight_and_its_own_decay() -> None:
+    """`w = base × 2^(-age/30)`, with all three numbers on the row so the arithmetic is checkable."""
+    aged = an_evidence(
+        id="ev-2",
+        source_class="third_party_audit",
+        observed_at=(NOW - timedelta(days=15)).strftime(policy.TIMESTAMP),
+    )
+    rows = {row.source_class: row for row in policy.contributions([an_evidence(), aged], now=NOW)}
+    assert rows.keys() == {"verified_system_observation", "third_party_audit"}
+    for source_class, row in rows.items():
+        assert row.base == pytest.approx(policy.BASE_WEIGHT[source_class])
+        assert row.weight == pytest.approx(row.base * 2 ** (-row.age_days / policy.HALF_LIFE_DAYS))
+    assert rows["third_party_audit"].age_days == pytest.approx(15.0)
+
+
+def test_the_seeded_sup_042_chain_is_the_arithmetic_item_17_publishes() -> None:
+    """The two numbers `scripts/seed_belief.py` commits, asserted offline so they cannot drift.
+
+    §3.2's figure shows 0.71 and 0.94, and neither is reachable under §4.3's weights — one
+    class caps at 0.60 and all five fresh cap at 0.9235. These are what the published table
+    actually produces for the seeded belief, and the doors they clear are 0.50 and 0.70.
+    """
+    contract = an_evidence(id="ev-c", source_class="contractual_record")
+    inference = an_evidence(id="ev-i", source_class="agent_inference")
+    audit_item = an_evidence(id="ev-a", source_class="third_party_audit")
+    # v1, committed eight days before v2: both of its items are fresh at its own commit.
+    assert policy.confidence([contract, inference], now=NOW) == pytest.approx(0.575)
+    assert policy.confidence([contract, inference], now=NOW) >= policy.NEW_BELIEF_THRESHOLD
+    # v2, over the accumulated set: v1's two items have decayed eight days, the audit is fresh.
+    later = NOW + timedelta(days=8)
+    fresh_audit = replace(audit_item, observed_at=later.strftime(policy.TIMESTAMP))
+    assert policy.confidence([contract, inference, fresh_audit], now=later) == pytest.approx(
+        0.7698, abs=0.0005
+    )
+    assert policy.confidence([contract, inference, fresh_audit], now=later) >= policy.FLIP_THRESHOLD
+
+
 # --- §2.2, the pipeline ----------------------------------------------------------------------
 
 

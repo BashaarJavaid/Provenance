@@ -101,6 +101,33 @@
   .verdict.ok { color: var(--ok); } .verdict.err { color: var(--bad); }
   .verdict.warn { color: var(--warn); }
 
+  /* --- belief inspector (item 17) --- */
+  form.inline { margin-top: 0.9rem; padding: 0.5rem 0.6rem; }
+  form.inline input { width: 9rem; }
+  #belief { margin-top: 0.9rem; font: 12.5px/1.6 var(--mono); overflow-x: auto; }
+  #belief:empty::after {
+    content: "no belief at that key"; color: var(--dim); opacity: 0.75;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  #belief h3 {
+    font: 11px/1 var(--mono); color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 1.1rem 0 0.5rem; font-weight: 400;
+  }
+  #belief h3:first-child { margin-top: 0; }
+  #belief .k { color: var(--dim); }
+  #belief .head { display: flex; gap: 0 1.4rem; flex-wrap: wrap; align-items: baseline; }
+  /* The arithmetic: one row per distinct source class, then the product it feeds. Fixed
+     columns so the numbers line up as a sum -- that alignment is the point of the surface. */
+  .calc { display: grid; grid-template-columns: 14rem 4rem 8.5rem 1.5rem 5rem; gap: 0 0.6rem; }
+  .calc > span { padding: 0.2rem 0; white-space: nowrap; }
+  .calc .n { text-align: right; }
+  .calc .tot > span { border-top: 1px solid var(--line); padding-top: 0.42rem; color: var(--fg); }
+  .calc .tot { display: contents; }
+  .ev .row { grid-template-columns: 11rem 14rem 11rem minmax(0, 1fr); }
+  .chain .row { grid-template-columns: 2.2rem 11rem 9rem 5rem minmax(0, 1fr) 9rem; }
+  #belief .now { color: var(--warn); }
+  #belief .stale { color: var(--bad); font-weight: 600; }
+
   footer { margin-top: 2rem; color: var(--dim); font-size: 0.8rem; }
 </style>
 
@@ -141,10 +168,15 @@
       <p>Every authorization with its risk breakdown by component, signed — denials included.</p>
       <div class="rows ledger" id="ledger"></div>
     </section>
-    <section>
+    <section class="wide">
       <h2>Belief inspector</h2>
       <p>Evidence, computed confidence and the arithmetic behind it, supersession chain, decay clock.</p>
-      <span class="pending">awaiting item 17 · phase 4</span>
+      <form id="lookup" class="inline">
+        <label for="f-entity">entity</label>
+        <input id="f-entity" value="SUP-042">
+        <button type="submit">Inspect</button>
+      </form>
+      <div id="belief"></div>
     </section>
     <section>
       <h2>Registry panel</h2>
@@ -164,11 +196,13 @@
   </div>
 
   <footer>
-    Six surfaces, one OpenTelemetry stream (<code>ARCHITECTURE.md</code> §8.2). The two filled
-    here read <code>GET /trace</code> — the same spans exported to Cloud Trace, held in
-    process so they render while the incident is still running. The Executor has no row
-    because it emits no span: what came of it reaches the trace through the verification
-    span that judges it.
+    Six surfaces (<code>ARCHITECTURE.md</code> §8.2). The fleet view and the ledger read
+    <code>GET /trace</code> — the same spans exported to Cloud Trace, held in process so they
+    render while the incident is still running. The Executor has no row because it emits no
+    span: what came of it reaches the trace through the verification span that judges it.
+    The belief inspector reads <code>GET /belief/{entity}</code> instead, and has to: §8.1
+    keeps content off spans, and a belief's evidence and arithmetic are content
+    (<code>docs/adr/ADR-021</code>).
   </footer>
 </main>
 
@@ -322,6 +356,97 @@
       badge.textContent = "unreachable";
     }
   }
+  // --- belief inspector (item 17) ---------------------------------------------------------
+  // This is the one surface that does NOT read the span stream, and it cannot: §8.1 keeps
+  // content off spans, and a belief's evidence, dates and arithmetic are all content. It
+  // reads GET /belief/{entity}, which is unauthenticated for the same reason /trace is.
+  const f3 = n => Number(n).toFixed(3);
+  const day = s => String(s ?? "").slice(0, 10);
+
+  async function belief(entity) {
+    const box = el("belief");
+    let b;
+    try {
+      const response = await fetch(`/belief/${encodeURIComponent(entity)}`, { cache: "no-store" });
+      if (!response.ok) { box.innerHTML = ""; return; }
+      b = await response.json();
+    } catch { return; }
+
+    const versions = b.versions, inForce = versions[versions.length - 1], c = b.current;
+    const f = (k, v, cls = "") => `<span><span class="k">${k}</span> <b class="${cls}">${esc(v)}</b></span>`;
+
+    // Two numbers, labelled: the one stored on the immutable version, and §4.3 recomputed as
+    // of now. They differ by exactly the decay between them, which is the decay clock doing
+    // something rather than being a date on a document.
+    const drift = c.confidence_now < inForce.confidence ? "now" : "";
+    const head =
+      `<div class="head">` +
+      f("belief", b.belief_id) + f("entity", b.entity) + f("domain", b.domain) +
+      f("scope", b.scope) +
+      f("status", inForce.status, "verdict " + (inForce.status === "RETRACTED" ? "err" : "ok")) +
+      f("version", `${inForce.version} of ${versions.length}`) +
+      `</div>`;
+
+    const rows = c.breakdown.map(r =>
+      `<span>${esc(r.source_class)}</span><span class="n">${f3(r.base)}</span>` +
+      `<span class="k">x 2^(-${r.age_days.toFixed(1)}/${f3(inForce.half_life_days).replace(/\.?0+$/, "")})</span>` +
+      `<span class="k">=</span><span class="n">${f3(r.weight)}</span>`).join("");
+    const arithmetic =
+      `<h3>Computed confidence &mdash; §4.3, not asserted</h3>` +
+      `<div class="head">` +
+      f("at commit", `${f3(inForce.confidence)}  (${day(inForce.committed_at)})`) +
+      f("as of now", f3(c.confidence_now), drift) +
+      f("threshold", f3(inForce.threshold)) +
+      `</div><div class="calc">${rows}` +
+      `<div class="tot"><span>1 &minus; &Pi;(1 &minus; w)</span><span></span><span></span>` +
+      `<span class="k">=</span><span class="n">${f3(c.confidence_now)}</span></div></div>`;
+
+    const evidence =
+      `<h3>Evidence &mdash; typed, and re-checkable by a third party</h3><div class="rows ev">` +
+      inForce.evidence_ids.map(id => {
+        const e = b.evidence[id] || {};
+        return `<div class="row"><span class="who">${esc(id)}</span>` +
+          `<span class="meta">${esc(e.source_class)}</span>` +
+          `<span class="meta">${esc(day(e.observed_at))}</span>` +
+          `<span class="sum"><em>${esc(e.verifiable_by)}</em></span></div>`;
+      }).join("") + `</div>`;
+
+    // §6.5: an organization that cannot tell "we know this is fine" from "we last checked six
+    // weeks ago" has a log, not a memory. So an expired clock is reported, not hidden.
+    const left = Math.floor((Date.parse(inForce.expires_at) - Date.now()) / 86400000);
+    const decay =
+      `<h3>Decay clock</h3><div class="head">` +
+      f("half-life", `${inForce.half_life_days}d`) + f("expires", day(inForce.expires_at)) +
+      f(left >= 0 ? "remaining" : "expired",
+        left >= 0 ? `${left}d` : `${-left}d ago`, left >= 0 ? "" : "stale") +
+      f("on expiry", inForce.on_expiry) +
+      `</div><p>The Staleness Sweeper that consumes this arrives in item 29; nothing acts on it yet.</p>`;
+
+    // Backwards-only links: `supersedes` is stored, `superseded_by` is derived on read from
+    // the next version existing (ADR-016). Nothing here was ever written twice.
+    const chain =
+      `<h3>Supersession chain &mdash; append-only, ${versions.length} version${versions.length > 1 ? "s" : ""}</h3>` +
+      `<div class="rows chain">` + versions.map(v =>
+        `<div class="row ${v.superseded_by ? "" : "ok"}"><span class="dot">#${v.version}</span>` +
+        `<span class="meta">${esc(day(v.committed_at))}</span>` +
+        `<span class="who">${esc(v.status)}</span>` +
+        `<span class="n">${f3(v.confidence)}</span>` +
+        `<span class="sum"><em>ev-[${v.evidence_ids.map(i => esc(i.slice(3, 11))).join(", ")}]</em></span>` +
+        `<span class="meta">${v.superseded_by ? "&rarr; superseded by #" + v.superseded_by : "&rarr; current"}</span>` +
+        `</div>`).join("") + `</div>`;
+
+    box.innerHTML = head + arithmetic + evidence + decay + chain;
+  }
+
+  el("lookup").addEventListener("submit", event => {
+    event.preventDefault();
+    belief(el("f-entity").value.trim());
+  });
+
   health(); setInterval(health, 15000);
   poll(); setInterval(poll, 1000);
+  // A belief changes on the order of once per demo, so it rides the 15s tick rather than
+  // the 1s one -- 60x the reads would buy nothing, and items 28 and 29 are still visible.
+  const inspect = () => belief(el("f-entity").value.trim());
+  inspect(); setInterval(inspect, 15000);
 </script>
