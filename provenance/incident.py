@@ -65,6 +65,7 @@ from provenance import (
     gateway,
     models,
     policy,
+    recall,
     registry,
     telemetry,
     tools,
@@ -152,10 +153,11 @@ class _Scratch:
     """
 
     outcome: IncidentOutcome = "ESCALATED"
-    # What `recall()` nominated for this incident. Item 15's ledger cites it, so a later
-    # retraction of one of these beliefs can flag the action this incident authorized.
-    # Empty until item 16 builds recall (§6.6).
-    recalled: tuple[str, ...] = ()
+    # What memory handed this incident (§6.6, item 16): the entity beliefs found by exact
+    # key, the class beliefs the index nominated and the store confirmed current, and the
+    # nomination list before that filter. Item 15's ledger cites the *entity* ids off it, so
+    # a later retraction of one can flag the action this incident authorized.
+    recalled: recall.Recalled = field(default_factory=recall.Recalled)
     decision: gateway.Decision | None = None
     validated: action.Action | None = None
     proposal: dict[str, Any] | None = None
@@ -185,23 +187,8 @@ def load_planner_key() -> ec.EllipticCurvePrivateKey:
     return key
 
 
-async def recall(entity_id: str) -> tuple[str, ...]:
-    """What memory already believes about this entity (§6.6).
-
-    Empty until item 16 builds recall against the item-12 belief store. The step exists now
-    so that item 18's `verify:` line -- "the recall event appears in the trace before the
-    domain agent's first hypothesis" -- has a slot to fill rather than a graph to reshape,
-    and so the reasoning spans carry `recall.belief_ids` from the first incident onward.
-
-    Item 15 added a second consumer: what this returns is cited by the authorization ledger
-    (`audit.record()`), which is what lets a retraction flag the actions that rested on the
-    retracted belief (§6.4). Until this returns real ids, every ledger record cites nothing.
-    """
-    return ()
-
-
 def _seed_state(
-    trigger: Trigger, planner_version: str, recalled: tuple[str, ...]
+    trigger: Trigger, planner_version: str, recalled: recall.Recalled
 ) -> dict[str, Any]:
     """Everything an agent instruction interpolates. Facts come from authorities, not the trigger.
 
@@ -228,8 +215,9 @@ def _seed_state(
         "nominal_error_rate_pct": f"{service.error_rate * 100:g}",
         "known_action_classes": ", ".join(tool.action_class for tool in tools.TOOLS),
         "planner_identity": f"{PLANNER_ID}@{planner_version}",
-        "recall_summary": "none" if not recalled else ", ".join(recalled),
-        _reasoning.RECALL_BELIEF_IDS: list(recalled),
+        "recall_summary": recalled.summary(),
+        _reasoning.RECALL_BELIEF_IDS: list(recalled.belief_ids),
+        _reasoning.RECALL_NOMINATED_IDS: list(recalled.nominated_ids),
         "malformed_feedback": "",
         "diagnosis_summary": "",
         # Item 10. The Verification Agent's instruction interpolates all three, and the
@@ -341,7 +329,12 @@ def build_graph(
                 outcome=decision.outcome,
                 subject=decision.subject,
                 signature=decision.signature,
-                belief_ids=scratch.recalled,
+                # ENTITY ids only, never the class beliefs recall also returned. §6.2 caps a
+                # class belief as ADVISORY ONLY -- it may reorder what gets investigated and
+                # may never be the evidence that authorizes an action -- and this field is the
+                # record of what an action rested on. Citing one here would make §6.4's
+                # retraction flag actions on grounds §6.2 says they could not have had.
+                belief_ids=scratch.recalled.entity_ids,
                 now=now,
                 client=client,
             )
@@ -533,11 +526,13 @@ async def run_incident(
     model_domain: str | object = None,
     model_planner: str | object = None,
     model_verification: str | object = None,
+    embed: recall.Embedder | None = None,
 ) -> IncidentResult:
     """One trigger, one incident, one root span. Never raises on a bad proposal.
 
     The model arguments exist so tests can substitute a fake `BaseLlm`; unset, each falls
-    back to its `models.py` role string. Everything else the loop needs -- the Planner's
+    back to its `models.py` role string. `embed` is the same arrangement for item 16's recall
+    index -- unset, it calls Vertex. Everything else the loop needs -- the Planner's
     version and public key -- is read from the registry at request time (§1.1 property 4),
     never from a constant here.
     """
@@ -551,7 +546,19 @@ async def run_incident(
         trigger_signal=trigger.signal,
     ) as recorder:
         agent = await registry.get_agent(PLANNER_ID, client=client)
-        recalled = await recall(trigger.target)
+        service = company.service(trigger.target)
+        recalled = await recall.recall(
+            trigger.target,
+            recall.query_text(
+                target=trigger.target,
+                signal=trigger.signal,
+                tier=service.tier,
+                description=service.description,
+                observed_value=trigger.observed_value,
+            ),
+            client=client,
+            embed=embed,
+        )
         scratch.recalled = recalled
         state = _seed_state(trigger, agent.version, recalled)
 

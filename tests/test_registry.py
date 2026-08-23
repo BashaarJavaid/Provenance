@@ -114,6 +114,13 @@ class _FakeCollection:
     def document(self, doc_id: str) -> FakeDocument:
         return FakeDocument(self._store, self._docs, doc_id)
 
+    async def stream(self) -> AsyncIterator[FakeSnapshot]:
+        """Item 16's `beliefs.class_statements()` enumerates a whole collection, unfiltered."""
+        if self._store.error is not None:
+            raise self._store.error
+        for doc_id, data in list(self._docs.items()):
+            yield FakeSnapshot(data, doc_id)
+
     def where(self, *, filter: Any) -> _FakeQuery:
         """Item 15's `audit.flag()` is the one caller, and `array_contains` its one operator."""
         field, op, value = filter.field_path, filter.op_string, filter.value

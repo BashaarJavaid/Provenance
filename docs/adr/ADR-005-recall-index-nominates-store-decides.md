@@ -10,6 +10,8 @@
 2. **Stale and retracted knowledge must be unreachable through the side door.** Retraction (§6.4) and staleness downgrades (§6.5) are only guarantees if *every* read path respects them. An index that returns full belief content would let a retracted belief keep informing diagnoses through its embedding. IDs-only makes the store the single choke point for currency — and the ARCHITECTURE §10 recall test seeds a RETRACTED belief as the closest match and asserts it never reaches the Orchestrator.
 3. **Exact-key entity recall needs no ML at all.** A deviation on `inventory-api` reads the beliefs for `inventory-api`, mechanically. Similarity search is reserved for the one problem that actually is a similarity problem: matching a novel deviation to a class-belief statement.
 
+**As built (ROADMAP item 16):** see [`ADR-020`](./ADR-020-recall-as-built.md) — query-time embeddings rather than a Vector Search endpoint, the statement copied onto the belief root document so that "the index never sees currency" is structural, and the nomination list published beside the survivors so the drop is visible in the trace.
+
 **Revisit when:** class-belief volume makes nomination quality a measured bottleneck (better embeddings, reranking) — the division of labor (index nominates, store decides) is not up for revision.
 
 **Alternatives considered:** classic RAG over incident history (retrieves similar text, not current truth — the anti-pattern); making the vector index the belief store (see ADR-001); keyword/tag matching for class beliefs (typed facts vs statement phrasing rarely share surface forms; this is the legitimate use case for embeddings).

@@ -91,7 +91,7 @@ arrives as an environment variable. Item 9 stops at the signed decision; nothing
 **What this deliberately does not do:** execute the approved action or verify it (item 10 —
 these nodes are appended, not reshaped), persist an incident, park or resume a held one (item
 30's Task API; a HOLD here simply ends the incident with `outcome=HELD`), recall anything
-(`incident.recall()` returns empty until item 16 — the node exists so item 18 fills a slot
+(recall returned empty until item 16, which filled it in `provenance/recall.py` without reshaping the graph — the step exists so item 18 fills a slot
 rather than reshaping a graph), render anything (item 11 owns all six §8.2 surfaces), or
 implement item 20's `REFUTED` retry budget.
 

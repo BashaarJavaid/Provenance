@@ -136,6 +136,13 @@ ATTR_REASONING_SELECTED_HYPOTHESIS = "provenance.reasoning.selected_hypothesis"
 ATTR_REASONING_INPUT_TOKENS = "provenance.reasoning.input_tokens"
 ATTR_REASONING_OUTPUT_TOKENS = "provenance.reasoning.output_tokens"
 ATTR_RECALL_BELIEF_IDS = "provenance.recall.belief_ids"
+# Item 16. What the recall index nominated, *before* the store dropped whatever was RETRACTED
+# or UNKNOWN(stale). The first new attribute key since item 2 defined the vocabulary, and it
+# earns the exception the same way `evidence.ids` beside `novel_count` does: the guarantee
+# §6.6 makes is that a retracted belief can be the closest match and still never reach a
+# reasoning agent, and with only the survivors on the span that is indistinguishable from an
+# index that found nothing. The gap between these two keys is the audit trail.
+ATTR_RECALL_NOMINATED_IDS = "provenance.recall.nominated_ids"
 
 ATTR_DECISION_OUTCOME = "provenance.decision.outcome"
 ATTR_DECISION_REASON = "provenance.decision.reason"
@@ -559,6 +566,7 @@ def reasoning_chain(
     model: str,
     step: str,
     recall_belief_ids: Sequence[str],
+    recall_nominated_ids: Sequence[str] = (),
 ) -> Iterator[ReasoningRecorder]:
     """What a model considered, structurally. Labels and IDs only — never its prose."""
     with _shape(
@@ -569,6 +577,7 @@ def reasoning_chain(
             ATTR_REASONING_MODEL: model,
             ATTR_REASONING_STEP: step,
             ATTR_RECALL_BELIEF_IDS: tuple(recall_belief_ids),
+            ATTR_RECALL_NOMINATED_IDS: tuple(recall_nominated_ids),
         },
         ReasoningRecorder,
     ) as rec:

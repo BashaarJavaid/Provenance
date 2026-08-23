@@ -133,9 +133,14 @@ CommitReason = Literal[
     "STORE_UNAVAILABLE",
 ]
 
-# §3.2: "domain-typed; UNKNOWN and RETRACTED are universal". The one status this module
-# writes by name — every other status is the caller's word for what its domain believes.
+# §3.2: "domain-typed; UNKNOWN and RETRACTED are universal". `RETRACTED` is the one status
+# this module writes by name — every other status is the caller's word for what its domain
+# believes. `UNKNOWN` is the second universal one and nothing writes it yet: §6.5's Staleness
+# Sweeper is item 29's. It is named here rather than there because item 16's recall has to
+# drop it from every read, and a read path that learns about a status only when something
+# starts writing it is one release of a stale belief informing a diagnosis (§7.3).
 RETRACTED = "RETRACTED"
+UNKNOWN = "UNKNOWN"
 
 # §2.2 stage 6 increments the standing counter on a REJECT, and §3.4 narrows which ones:
 # "three rejected memory writes **lacking verifiable evidence**". These four are the
@@ -292,7 +297,7 @@ async def commit(
     client: Any | None = None,
 ) -> BeliefCommit:
     """Run §2.2 on one proposed belief. Returns a signed outcome; a REJECT is not an error."""
-    belief_id = f"belief-{entity}"
+    belief_id = beliefs.belief_id_for(entity)
     verdict = await _decide(
         belief_id=belief_id,
         entity=entity,
@@ -338,7 +343,7 @@ async def retract(
 
     Returns a signed outcome; a REJECT is not an error, exactly as `commit()`'s is not.
     """
-    belief_id = f"belief-{entity}"
+    belief_id = beliefs.belief_id_for(entity)
     verdict = await _decide(
         belief_id=belief_id,
         entity=entity,

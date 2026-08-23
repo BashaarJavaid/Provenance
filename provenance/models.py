@@ -29,4 +29,10 @@ DOMAIN = os.environ.get("PROVENANCE_MODEL_DOMAIN", "gemini-2.5-pro")
 PLANNER = os.environ.get("PROVENANCE_MODEL_PLANNER", "gemini-2.5-pro")
 VERIFICATION = os.environ.get("PROVENANCE_MODEL_VERIFICATION", "gemini-3.5-flash")
 
+# Item 16's recall index (§6.6). Not a reasoning role -- it nominates candidate belief ids and
+# decides nothing, which is why ADR-005 lets the index be dumb. Probed live before it was
+# wired: `text-embedding-005` serves from **both** `us-central1` and `global` for this project
+# at 768 dimensions, so `LOCATION` below covers it and recall needs no endpoint of its own.
+EMBEDDING = os.environ.get("PROVENANCE_MODEL_EMBEDDING", "text-embedding-005")
+
 LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")

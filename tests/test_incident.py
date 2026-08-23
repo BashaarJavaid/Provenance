@@ -189,7 +189,11 @@ def a_verification(outcome: str = "CONFIRMED") -> str:
 
 
 def run(
-    replies: list[str], *, store: FakeFirestore | None = None, now: datetime | None = None
+    replies: list[str],
+    *,
+    store: FakeFirestore | None = None,
+    now: datetime | None = None,
+    embed: Any | None = None,
 ) -> incident.IncidentResult:
     """One incident, with every model call answered from `replies` in order."""
     model = FakeLlm(model="fake-model", replies=list(replies), prompts=[])
@@ -197,6 +201,7 @@ def run(
         incident.run_incident(
             a_trigger(),
             now=now,
+            embed=embed,
             client=store if store is not None else a_store(),
             planner_key=PLANNER_KEY,
             model_orchestrator=model,
@@ -650,9 +655,9 @@ def ledger(store: FakeFirestore) -> list[dict[str, Any]]:
 def test_an_authorized_action_is_written_to_the_ledger() -> None:
     """§6.4's join, built here because nothing else records what an action rested on.
 
-    `belief_ids` is empty because `recall()` is still item 16's stub — that is the honest
-    state, and it is exactly what makes the record worth writing now: the moment recall
-    returns ids, a retraction of one of them can find this action.
+    `belief_ids` is empty on *this* run because memory is empty when the incident starts —
+    incident #1 is the fleet's first encounter with this service. The two tests below are
+    the ones that show a recalled belief reaching the record, and a retracted one not.
     """
     store = a_store()
     result = run(a_clean_run(), store=store)
@@ -667,8 +672,114 @@ def test_an_authorized_action_is_written_to_the_ledger() -> None:
     assert entry["outcome"] == "APPROVE"
     assert entry["signature"] == result.decision.signature
     assert entry["subject"] == result.decision.subject
-    assert entry["belief_ids"] == [], "empty until item 16 builds recall"
+    assert entry["belief_ids"] == [], "nothing was believed about this service yet"
     assert entry["flagged_by"] == []
+
+
+def a_prior_belief(store: FakeFirestore, *versions: beliefs.BeliefVersion) -> None:
+    """Whatever the fleet already believed about `inventory-api` when the incident woke."""
+    for version in versions:
+        asyncio.run(
+            beliefs.append(
+                version,
+                (
+                    beliefs.Evidence(
+                        id=f"ev-prior-{version.version}",
+                        source_id="firestore:services/inventory-api",
+                        source_class="verified_system_observation",
+                        observed_at=f"2026-08-0{version.version}T12:00:00Z",
+                        ingested_at=f"2026-08-0{version.version}T12:00:00Z",
+                        payload_hash="a" * 64,
+                        verifiable_by="re-read services/inventory-api",
+                    ),
+                ),
+                client=store,
+            )
+        )
+
+
+def a_prior_version(version: int, **overrides: Any) -> beliefs.BeliefVersion:
+    fields: dict[str, Any] = {
+        "belief_id": "belief-inventory-api",
+        "version": version,
+        "scope": "ENTITY",
+        "domain": "infrastructure",
+        "entity": "inventory-api",
+        "status": incident.BELIEF_STATUS,
+        "confidence": 0.60,
+        "threshold": 0.50,
+        "evidence_ids": (f"ev-prior-{version}",),
+        "authority": "sre-infra-agent@v1 (standing: GOOD)",
+        "committed_at": f"2026-08-0{version}T12:00:00Z",
+        "committed_by": "memory-policy-engine",
+        "signature": "ecdsa:beef",
+        "supersedes": None if version == 1 else version - 1,
+        "half_life_days": 30.0,
+        "expires_at": "2026-09-21T12:00:00Z",
+        "on_expiry": "REVERIFY",
+    }
+    return beliefs.BeliefVersion(**(fields | overrides))
+
+
+def test_a_recalled_entity_belief_is_what_the_action_is_recorded_as_resting_on() -> None:
+    # Item 16. The exact-key read (§6.1) reaches the ledger, which is what makes §6.4's
+    # "flag every action authorized on that belief" find anything at all on a real incident.
+    store = a_store()
+    a_prior_belief(store, a_prior_version(1))
+
+    result = run(a_clean_run(), store=store)
+
+    assert result.outcome == "RESOLVED"
+    assert ledger(store)[0]["belief_ids"] == ["belief-inventory-api"]
+
+
+def test_the_ledger_cites_the_entity_belief_and_never_the_advisory_class_one() -> None:
+    # §6.2 caps a class belief as ADVISORY ONLY: it may reorder what gets investigated and may
+    # never be the evidence that authorizes an action. `belief_ids` is the record of what an
+    # action rested on, so a class belief in it would make §6.4's retraction flag actions on
+    # grounds §6.2 says they could not have had. Both beliefs reach the prompt; one is cited.
+    store = a_store()
+    a_prior_belief(store, a_prior_version(1))
+    a_prior_belief(
+        store,
+        a_prior_version(
+            1,
+            belief_id="belief-class-config-deploy",
+            scope="CLASS",
+            entity="service.config_deploy",
+            statement="config deploys correlate with error-rate spikes on tier-2 services",
+        ),
+    )
+
+    async def embed(texts: Any) -> tuple[tuple[float, ...], ...]:
+        return tuple((1.0, 0.0) for _ in texts)  # everything is a perfect match
+
+    result = run(a_clean_run(), store=store, embed=embed)
+
+    assert result.outcome == "RESOLVED"
+    entry = ledger(store)[0]
+    assert entry["belief_ids"] == ["belief-inventory-api"]
+    assert "belief-class-config-deploy" not in entry["belief_ids"]
+
+
+def test_a_retracted_belief_is_recalled_by_nothing_and_cited_by_nothing(
+    spans: InMemorySpanExporter,
+) -> None:
+    # ROADMAP item 16's verify line, at the incident boundary rather than the unit one: a
+    # belief the exact-key read would have found is RETRACTED, so it reaches neither the
+    # prompt, nor the reasoning spans, nor the record of what the action rested on.
+    store = a_store()
+    a_prior_belief(store, a_prior_version(1), a_prior_version(2, status="RETRACTED"))
+
+    result = run(a_clean_run(), store=store)
+
+    assert result.outcome == "RESOLVED"
+    assert ledger(store)[0]["belief_ids"] == []
+    chains = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_REASONING_CHAIN]
+    assert chains
+    for span in chains:
+        assert span.attributes is not None
+        assert span.attributes["provenance.recall.belief_ids"] == ()
 
 
 def test_a_held_action_is_not_recorded_as_authorized() -> None:

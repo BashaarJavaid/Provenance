@@ -1,7 +1,8 @@
 """The Orchestrator (§5.3): classify the trigger, so the control loop can route it.
 
 §5.3 gives this role three verbs -- classify, recall, route -- of which only the first is
-reasoning. Recall is a store lookup (§6.6, item 16) and routing is a registry lookup, and
+reasoning. Recall is a store lookup (§6.6, `provenance/recall.py`) and routing is a table
+lookup, and
 both belong in `incident.py` where they can be checked. What is left here is the one
 judgement a model is actually for: given a deviation, which domain owns it.
 

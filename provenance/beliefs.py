@@ -40,7 +40,9 @@ Schema reasoning in `docs/adr/ADR-016`, and `docs/adr/ADR-017` for the novelty c
 added over the evidence this module stores (`evidence_id`, `read_evidence`, `novel`). Item 14
 added the §6.3 conflict rule and item 15 §6.4's `RETRACT`, **neither of which changed this
 module**: a retraction appends a version whose status is `RETRACTED`, so `append()` is still
-the only writer here and there is still no delete. Item 16 adds recall.
+the only writer here and there is still no delete. Item 16 added §3.2's `statement`, its
+copy on the root document, and the two reads recall needs -- `belief_id_for()` for the
+exact key and `class_statements()` for the index -- but no writer and no delete either.
 """
 
 from __future__ import annotations
@@ -91,6 +93,10 @@ class BeliefVersion:
 
     `superseded_by` is **derived, never stored**: `to_document()` omits it and the read path
     fills it in. That is what keeps a committed version document write-once.
+
+    `statement` is §3.2's CLASS-only field — the sentence a class belief asserts, which is what
+    item 16's recall index embeds. An ENTITY version legitimately has none, so it defaults to
+    empty rather than being required.
     """
 
     belief_id: str
@@ -107,6 +113,7 @@ class BeliefVersion:
     committed_by: str
     signature: str
     supersedes: int | None = None
+    statement: str = ""
     half_life_days: float = 0.0
     expires_at: str = ""
     on_expiry: str = "REVERIFY"
@@ -132,6 +139,16 @@ class VersionConflict(BeliefStoreError):
 def payload_hash(payload: object) -> str:
     """`sha256` of what was measured. §3.3 stores the hash; the payload is not authority."""
     return hashlib.sha256(repr(payload).encode()).hexdigest()
+
+
+def belief_id_for(entity: str) -> str:
+    """The one home for the `belief-{entity}` convention (§6.1's exact key).
+
+    It was written out twice in `policy.py` and item 16's recall would have been the third
+    copy. The exact-key read and the write have to agree on it or recall silently finds
+    nothing, which is the kind of disagreement a shared function makes impossible.
+    """
+    return f"belief-{entity}"
 
 
 def evidence_id(source_id: str, observed_at: str) -> str:
@@ -214,6 +231,9 @@ def from_document(belief_id: str, version: int, data: dict[str, Any] | None) -> 
             committed_by=data["committed_by"],
             signature=data["signature"],
             supersedes=data["supersedes"],
+            # §3.2 makes `statement` CLASS-only, so absent is what an ENTITY version is
+            # supposed to look like — not a malformed document. The one `.get` in here.
+            statement=data.get("statement", ""),
             half_life_days=data["half_life_days"],
             expires_at=data["expires_at"],
             on_expiry=data["on_expiry"],
@@ -277,6 +297,30 @@ async def read_evidence(ids: Sequence[str], *, client: Any | None = None) -> tup
     return tuple(items)
 
 
+async def class_statements(*, client: Any | None = None) -> tuple[tuple[str, str], ...]:
+    """Every CLASS belief's `(belief_id, statement)`, read from root documents only (item 16).
+
+    This is the whole read surface of the recall index (§6.6, ADR-005), and the reason it is
+    the *root* document and not `current()` is the point of the design: a root document holds
+    no status and no confidence, so an index built on this one cannot see currency even by
+    accident. Resolving what is true from the ids it nominates is `recall.resolve()`'s job,
+    and it goes through `current()` like every other read of what the organization believes.
+
+    A root with an empty statement is skipped rather than embedded: an ENTITY belief has none
+    by §3.2, and embedding the empty string would put every entity belief in the index at
+    whatever similarity the empty string happens to score.
+    """
+    found = []
+    try:
+        async for snapshot in _db(client).collection(COLLECTION).stream():
+            data = snapshot.to_dict() or {}
+            if data.get("scope") == "CLASS" and data.get("belief_id") and data.get("statement"):
+                found.append((data["belief_id"], data["statement"]))
+    except GoogleAPIError as exc:
+        raise BeliefStoreUnavailable(str(exc)) from exc
+    return tuple(found)
+
+
 def evidence_from_document(item_id: str, data: dict[str, Any] | None) -> Evidence:
     """Parse one stored evidence item. Raises rather than defaulting, as `from_document` does."""
     if data is None:
@@ -315,6 +359,12 @@ async def append(
                 "entity": version.entity,
                 "domain": version.domain,
                 "scope": version.scope,
+                # Item 16: the recall index reads root documents *only*, so that ADR-005's
+                # "the index never sees confidence, status, or currency" is a fact about the
+                # read path rather than a promise about restraint. A class belief's statement
+                # is what identifies it and does not move across versions, so create-if-absent
+                # writing it once at v1 is correct.
+                "statement": version.statement,
                 "created_at": version.committed_at,
             }
         )
