@@ -589,28 +589,47 @@ def test_a_refuted_verification_writes_the_negative_belief(spans: InMemorySpanEx
     about the remediation rather than the negation of `BELIEF_STATUS`: a rollback that failed
     to help does not show the config was innocent. And the incident still ends `ESCALATED` --
     the fleet learned something and the deviation is still there, which is not a contradiction.
+
+    Since item 20 the first refutation is re-planned, so the second plan/verification pair is
+    supplied here rather than left to exhaust the queue: a `FakeLlm` asked for a reply it does
+    not have raises, `run_incident()`'s blanket `except` turns that into `ESCALATED`, and this
+    test would then pass on a fleet whose retry edge was broken.
     """
     store = a_store(rollback_fails=True)
     result = run(
-        [a_classification(), a_diagnosis(), a_proposal(), a_verification("REFUTED")], store=store
+        [
+            a_classification(),
+            a_diagnosis(),
+            a_proposal(),
+            a_verification("REFUTED"),
+            a_proposal(),
+            a_verification("REFUTED"),
+        ],
+        store=store,
     )
 
     assert result.outcome == "ESCALATED"
     assert result.verification == "REFUTED"
+    assert result.refuted_attempts == 2
     assert result.belief is not None
-    assert (result.belief.outcome, result.belief.reason) == ("COMMIT", "ABOVE_THRESHOLD")
-    assert result.belief.version == 1
-    assert result.belief.confidence == pytest.approx(0.60)
-    policy.verify_commit(result.belief, policy.public_key_pem())
+    # The *last* attempt's commit. Both attempts observe inside one second here, so their
+    # `(source_id, observed_at)` pairs collide and §2.2 stage 3 refuses the second -- which is
+    # correct and is the same property `test_a_second_incident_supersedes_...` documents. Live,
+    # a model call separates them and the second commits as v2; `scripts/verify_refuted.py` is
+    # what asserts that. What matters here is that attempt 1's v1 was written and stands.
+    assert (result.belief.outcome, result.belief.reason) == ("REJECT", "NO_NEW_EVIDENCE")
+    stored = store.collections["beliefs/belief-inventory-api/versions"]
+    assert list(stored) == ["1"]
 
     # The failed rollback still deployed, and the belief records what was measured after it.
     assert result.execution is not None and result.execution.rollback_failed is True
     service = store.collections["services"]["inventory-api"]
     assert (service["current_config_version"], service["error_rate"]) == ("v41", 0.38)
 
-    version = store.collections["beliefs/belief-inventory-api/versions"]["1"]
+    version = stored["1"]
     assert version["status"] == incident.REFUTED_STATUS == "ROLLBACK_INEFFECTIVE"
     assert version["status"] != incident.BELIEF_STATUS
+    assert version["confidence"] == pytest.approx(0.60)
 
     verified = next(
         s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_VERIFICATION_OUTCOME
@@ -647,12 +666,23 @@ def test_a_refutation_cannot_flip_a_confirmed_belief_on_its_own(
     assert confirmed.belief is not None and confirmed.belief.outcome == "COMMIT"
 
     refuted = run(
-        [a_classification(), a_diagnosis(), a_proposal(), a_verification("REFUTED")],
+        [
+            a_classification(),
+            a_diagnosis(),
+            a_proposal(),
+            a_verification("REFUTED"),
+            # Item 20 re-plans the first refutation. Both attempts meet the same flip door, so
+            # the assertions below hold for either -- but the pair has to be supplied, or the
+            # queue empties and this passes on an exception instead of on §6.3.
+            a_proposal(),
+            a_verification("REFUTED"),
+        ],
         store=store,
         now=NOW + timedelta(days=1),
     )
 
     assert refuted.verification == "REFUTED"
+    assert refuted.refuted_attempts == 2
     assert refuted.belief is not None
     assert (refuted.belief.outcome, refuted.belief.reason) == ("REJECT", "INSUFFICIENT_FOR_FLIP")
     assert refuted.belief.reason not in policy.COUNTED_REJECTIONS
@@ -665,6 +695,230 @@ def test_a_refutation_cannot_flip_a_confirmed_belief_on_its_own(
     assert belief_span[-1].attributes is not None
     assert belief_span[-1].attributes["provenance.belief.threshold"] == pytest.approx(0.70)
     assert belief_span[-1].attributes["provenance.belief.supersedes"] == 1
+
+
+# --- item 20: the bounded retry -----------------------------------------------------------
+
+
+def a_refuted_pair() -> list[str]:
+    """One plan and the refutation of it. Two of these is the whole of §7.1's second budget."""
+    return [a_proposal(), a_verification("REFUTED")]
+
+
+def attempts(spans: InMemorySpanExporter) -> list[int]:
+    """Every `attempt` the trace carries, in the order the spans closed."""
+    return [
+        int(s.attributes["provenance.verification.attempt"])
+        for s in spans.get_finished_spans()
+        if s.name == telemetry.SPAN_VERIFICATION_OUTCOME and s.attributes is not None
+    ]
+
+
+def planning_spans(spans: InMemorySpanExporter) -> list[Any]:
+    return [
+        s
+        for s in spans.get_finished_spans()
+        if s.name == telemetry.SPAN_REASONING_CHAIN
+        and s.attributes is not None
+        and s.attributes["provenance.reasoning.step"] == "planning"
+    ]
+
+
+def test_two_consecutive_refutations_escalate_and_the_planner_is_never_asked_a_third_time(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 20's verify line, whole: "two consecutive REFUTED outcomes escalate; no third
+    attempt occurs anywhere in the trace".
+
+    The unconsumed-reply assertion is item 9's idiom for the malformed budget, and it is what
+    makes "never asked a third time" a fact about the loop rather than about the queue: a
+    seventh reply is supplied precisely so that consuming it would be visible.
+    """
+    model = FakeLlm(
+        model="fake-model",
+        replies=[
+            a_classification(),
+            a_diagnosis(),
+            *a_refuted_pair(),
+            *a_refuted_pair(),
+            *a_refuted_pair(),
+        ],
+        prompts=[],
+    )
+    result = asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=a_store(rollback_fails=True),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+
+    assert result.outcome == "ESCALATED"
+    assert result.verification == "REFUTED"
+    assert result.refuted_attempts == 2
+    assert model.replies == a_refuted_pair(), "the loop asked the Planner a third time"
+
+    # No third attempt, counted four ways: the verification the loop performed, the action it
+    # authorized, the plan it asked for, and the number the trace puts on each.
+    assert attempts(spans) == [1, 2]
+    assert len(planning_spans(spans)) == 2
+    authorized = [
+        s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_AUTHORIZATION_DECISION
+    ]
+    assert len(authorized) == 2
+    assert max(attempts(spans)) < 3
+
+
+def test_a_refuted_remediation_is_replanned_once_and_the_retry_can_resolve(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The budget is a bound, not a verdict: a retry that works closes the incident.
+
+    Nothing live reaches this -- `rollback_fails` is a switch, not a coin, so a live retry
+    fails the same way twice (item 20 deliberately added no "fails once" switch). It exists
+    here because a budget of 0 would satisfy the escalation test above and nothing else.
+    """
+    result = run(
+        [
+            a_classification(),
+            a_diagnosis(),
+            *a_refuted_pair(),
+            a_proposal(),
+            a_verification("CONFIRMED"),
+        ]
+    )
+
+    assert result.outcome == "RESOLVED"
+    assert result.verification == "CONFIRMED"
+    assert result.refuted_attempts == 1
+    assert attempts(spans) == [1, 2]
+
+
+def test_the_retry_prompt_carries_the_refutation(spans: InMemorySpanExporter) -> None:
+    """§7.2: "the planner re-plans **with the refutation as input**".
+
+    Item 9's lesson on the other budget: a re-plan with no feedback is only a second roll of
+    the dice. `prompts[-2]` is the retry's plan; `prompts[-1]` is the verification after it.
+    """
+    model = FakeLlm(
+        model="fake-model",
+        replies=[a_classification(), a_diagnosis(), *a_refuted_pair(), *a_refuted_pair()],
+        prompts=[],
+    )
+    asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=a_store(rollback_fails=True),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+
+    retry_prompt = model.prompts[-2]
+    assert "REFUTED" in retry_prompt
+    # The predicate it declared, and what was actually measured after the action ran.
+    assert json.loads(a_proposal())["success_predicate"] in retry_prompt
+    assert "0.38" in retry_prompt, "the retry was not told what the post-state measured"
+
+
+def test_the_retry_prompt_is_told_the_version_the_rollback_actually_deployed(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The first plan is told v42 off the fixture; by the retry, v41 is deployed.
+
+    Re-planning against a version the system no longer has is a re-plan aimed at the wrong
+    world -- and item 11.5's whole finding was that a Planner given a stale number writes a
+    predicate nothing can satisfy.
+    """
+    model = FakeLlm(
+        model="fake-model",
+        replies=[a_classification(), a_diagnosis(), *a_refuted_pair(), *a_refuted_pair()],
+        prompts=[],
+    )
+    asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=a_store(rollback_fails=True),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+
+    first_plan, retry_plan = model.prompts[2], model.prompts[-2]
+    assert "currently deployed config version: v42" in first_plan
+    assert "currently deployed config version: v41" in retry_plan
+
+
+def test_an_inconclusive_verification_is_never_retried(spans: InMemorySpanExporter) -> None:
+    """§7.2 gives ambiguity its own row -- escalate, learn nothing -- and no retry.
+
+    Widening the retry condition to "not CONFIRMED" would spend a model call re-planning
+    against measurements that settled nothing, and would make `refuted_attempts` a lie.
+    """
+    model = FakeLlm(
+        model="fake-model",
+        replies=[
+            a_classification(),
+            a_diagnosis(),
+            a_proposal(),
+            a_verification("INCONCLUSIVE"),
+            a_proposal(),  # must never be consumed
+        ],
+        prompts=[],
+    )
+    result = asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=a_store(),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+
+    assert (result.outcome, result.verification) == ("ESCALATED", "INCONCLUSIVE")
+    assert result.refuted_attempts == 0
+    assert result.belief is None
+    assert model.replies == [a_proposal()], "ambiguity was re-planned"
+    assert attempts(spans) == [1]
+    assert len(planning_spans(spans)) == 1
+
+
+def test_the_two_retry_budgets_are_independent(spans: InMemorySpanExporter) -> None:
+    """§7.1 states them as two bullets, so they are two counters (item 20).
+
+    One incident may spend both: the malformed emission, the re-plan that fixes it, and the
+    re-plan after the refutation is three Planner calls -- still bounded, which is the point. A
+    single shared budget would make a schema slip cost the fleet its one chance to actually fix
+    the service, which is not what §7.1 says either bullet is for.
+    """
+    result = run(
+        [
+            a_classification(),
+            a_diagnosis(),
+            a_proposal(action_class="RESTART_EVERYTHING"),  # malformed: spends budget 1
+            *a_refuted_pair(),  # refuted: spends budget 2
+            *a_refuted_pair(),
+        ],
+        store=a_store(rollback_fails=True),
+    )
+
+    assert result.outcome == "ESCALATED"
+    assert (result.malformed_attempts, result.refuted_attempts) == (1, 2)
+    assert len(planning_spans(spans)) == 3
+    assert attempts(spans) == [1, 2]
 
 
 def test_the_ambiguity_switch_executes_and_then_never_asks_the_verification_agent(

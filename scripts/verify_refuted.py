@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Item 19's `verify:` line, live: a refuted remediation teaches, an unverified one does not.
+"""Items 19 and 20's `verify:` lines, live: a refuted remediation teaches, is retried exactly
+once, and then escalates; an unverified one teaches nothing.
 
     PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" GOOGLE_CLOUD_PROJECT=provenance-hackathon \\
       GOOGLE_GENAI_USE_VERTEXAI=1 GOOGLE_CLOUD_LOCATION=global \\
@@ -7,11 +8,16 @@
 
 `ARCHITECTURE.md` §10's Verification row is two clauses and this script is both, in order:
 
-  * **REFUTED.** `error_rate_spike` + `rollback_fails`. The fleet diagnoses, proposes, is
-    authorized and executes -- and the rollback deploys v41 while leaving the rate at 0.38, so
-    the Verification Agent's honest answer to its own pre-declared predicate is `REFUTED`.
-    §7.2's second row then applies: one belief committed at 0.60 with status
-    `ROLLBACK_INEFFECTIVE`, and an incident that is still `ESCALATED`.
+  * **REFUTED, twice.** `error_rate_spike` + `rollback_fails`. The fleet diagnoses, proposes,
+    is authorized and executes -- and the rollback deploys v41 while leaving the rate at 0.38,
+    so the Verification Agent's honest answer to its own pre-declared predicate is `REFUTED`.
+    §7.2's second row then applies: a belief committed at 0.60 with status
+    `ROLLBACK_INEFFECTIVE`. §7.1's second budget applies next (item 20): the Planner is
+    re-planned **once**, with the refutation as input, and the switch is a switch rather than a
+    coin, so the second attempt is refuted too -- a `v2` re-affirmation citing both
+    observations, an incident still `ESCALATED`, and **no third attempt anywhere in the
+    trace**. That last clause is checked by counting, not by asserting: two verification spans
+    carrying `attempt` 1 and 2, two authorization spans, two planning chains, and nothing at 3.
   * **INCONCLUSIVE.** `error_rate_spike` + `verification_ambiguous`. The rollback *works* --
     v41, rate back to nominal -- and then nothing verifies it. §7.3 says an action that
     executed and was never checked is `INCONCLUSIVE`, and §7.2's third row says that writes
@@ -36,9 +42,16 @@ about a new field and the other does not, a run silently leaves state behind. `s
 `sys.path` when a script is run directly and that module's `main()` is `__main__`-guarded, so
 the import costs a few constants and nothing else.
 
-Costs three `gemini-2.5-pro` calls plus one `gemini-3.5-flash` for the REFUTED half, and three
-Pro calls for the INCONCLUSIVE one -- the Verification Agent is never invoked there, which is
-the point. Needs credentials, so it is not in CI; `tests/test_incident.py` is the offline half.
+The `v2` is the half the offline suite structurally cannot hold, which is why it is asserted
+here. §2.2's novelty check compares `(source_id, observed_at)` pairs and `beliefs.TIMESTAMP` has
+second resolution; a `FakeLlm` finishes both attempts inside one second, so offline the second
+commit is correctly refused `NO_NEW_EVIDENCE`. Live, a model call separates them. Delete item
+20's per-attempt `observed_at` stamp and the whole offline suite stays green -- this script is
+the only thing that goes red.
+
+Costs four `gemini-2.5-pro` calls plus two `gemini-3.5-flash` for the REFUTED half (the retry is
+one more of each), and three Pro calls for the INCONCLUSIVE one -- the Verification Agent is
+never invoked there, which is the point. Needs credentials, so it is not in CI; `tests/test_incident.py` is the offline half.
 """
 
 from __future__ import annotations
@@ -124,7 +137,14 @@ def check_reached_verification(result: Any) -> int:
 
 
 def check_refuted(result: Any, client: firestore.Client) -> int:
-    """§7.2's second row: the negative belief, and an incident that is still open."""
+    """§7.2's second row and §7.1's second budget: the negative belief, retried once, then open.
+
+    The belief reported here is the **retry's** -- `IncidentResult` carries the last attempt.
+    It is a `v2` and not a `v1`: same status and same `verified_system_observation` class, so
+    it is a re-affirmation facing the 0.50 door rather than a flip facing 0.70, and it cites
+    both observations. The confidence does not move, and that is §4.3 collapsing a source class
+    to its least-decayed item rather than memory failing to pay (item 18's lesson).
+    """
     failures = check_reached_verification(result)
 
     if result.execution is not None and not result.execution.rollback_failed:
@@ -136,14 +156,23 @@ def check_refuted(result: Any, client: firestore.Client) -> int:
         )
     if result.outcome != "ESCALATED":
         failures += fail(f"incident ended {result.outcome}, expected ESCALATED")
+    # Item 20's line, on the returned object; `check_spans` is where the trace says the same.
+    if result.refuted_attempts != 2:
+        failures += fail(
+            f"{result.refuted_attempts} refutation(s), expected 2 -- one attempt and one retry"
+        )
 
     if result.belief is None:
         failures += fail("REFUTED wrote no belief; §7.2 says confirmed refutation is knowledge")
     else:
         if (result.belief.outcome, result.belief.reason) != ("COMMIT", "ABOVE_THRESHOLD"):
             failures += fail(f"belief was {result.belief.outcome}/{result.belief.reason}")
-        if result.belief.version != 1:
-            failures += fail(f"belief is v{result.belief.version}, expected v1 on a cold chain")
+        if result.belief.version != 2:
+            failures += fail(
+                f"belief is v{result.belief.version}, expected v2 -- the retry re-affirms what "
+                "the first attempt committed. A v1 here means both attempts stamped the same "
+                "`observed_at` and §2.2 refused the second NO_NEW_EVIDENCE (item 20)."
+            )
         if abs(result.belief.confidence - EXPECTED_CONFIDENCE) > 1e-6:
             failures += fail(
                 f"confidence {result.belief.confidence:.4f}, expected {EXPECTED_CONFIDENCE}"
@@ -154,20 +183,27 @@ def check_refuted(result: Any, client: firestore.Client) -> int:
             failures += fail(f"the commit does not verify: {error}")
 
     # What the store actually holds, read before the teardown deletes it. `result.belief` is
-    # what the engine decided; this is the version a later incident would recall.
-    stored = (
-        client.collection(f"{beliefs.COLLECTION}/{BELIEF_ID}/versions")
-        .document("1")
-        .get()
-        .to_dict()
-        or {}
-    )
-    if stored.get("status") != incident.REFUTED_STATUS:
+    # what the engine decided; this is the chain a later incident would recall.
+    versions = client.collection(f"{beliefs.COLLECTION}/{BELIEF_ID}/versions")
+    stored = versions.document("1").get().to_dict() or {}
+    retry = versions.document("2").get().to_dict() or {}
+    for number, document in (("1", stored), ("2", retry)):
+        if document.get("status") != incident.REFUTED_STATUS:
+            failures += fail(
+                f"v{number}'s stored status is {document.get('status')!r}, "
+                f"expected {incident.REFUTED_STATUS!r}"
+            )
+        elif document.get("status") == incident.BELIEF_STATUS:
+            failures += fail(f"v{number} carries the status a confirmed run writes")
+    if retry.get("supersedes") != 1:
+        failures += fail(f"v2 supersedes {retry.get('supersedes')!r}, expected 1")
+    # A superseding version cites the accumulated set (item 13), so the retry's own observation
+    # is the second entry rather than the only one. Two attempts, two readings of the service.
+    if len(set(retry.get("evidence", []))) != 2:
         failures += fail(
-            f"stored status is {stored.get('status')!r}, expected {incident.REFUTED_STATUS!r}"
+            f"v2 cites {retry.get('evidence')}; expected the two attempts' observations. One id "
+            "means the retry re-cited the first attempt's reading rather than making its own."
         )
-    elif stored.get("status") == incident.BELIEF_STATUS:
-        failures += fail("the refuted run wrote the status a confirmed one writes")
 
     # The failed rollback still deployed. A rollback that skipped its own write would make the
     # refutation a fact about the executor rather than about the remediation (ADR-014).
@@ -182,7 +218,8 @@ def check_refuted(result: Any, client: firestore.Client) -> int:
     if not failures:
         print(
             f"    ok  refuted        v41 deployed, rate still {SPIKED_ERROR_RATE}, "
-            f"belief v1 {incident.REFUTED_STATUS} at {EXPECTED_CONFIDENCE}"
+            f"2 attempts, belief v2 {incident.REFUTED_STATUS} at {EXPECTED_CONFIDENCE} "
+            "superseding v1"
         )
     return failures
 
@@ -221,6 +258,38 @@ def check_inconclusive(result: Any, client: firestore.Client) -> int:
     return failures
 
 
+def check_attempts(by_name: dict[str, list[dict[str, str]]], verified: list[dict[str, str]]) -> int:
+    """Item 20's line: "no third attempt occurs anywhere in the trace", proven by counting.
+
+    Four independent counts, because one of them alone is weak evidence. Two verifications says
+    the loop judged twice; two authorizations says it really went back through the gateway
+    rather than re-verifying one execution; two planning chains says the Planner was asked
+    twice and no more; and the `attempt` values say the trace itself numbers them 1 and 2.
+    """
+    failures = 0
+    numbered = sorted(
+        int(labels.get(telemetry.ATTR_VERIFICATION_ATTEMPT, 0)) for labels in verified
+    )
+    if numbered != [1, 2]:
+        failures += fail(f"verification attempts are {numbered}, expected [1, 2]")
+    authorized = by_name.get(telemetry.SPAN_AUTHORIZATION_DECISION, [])
+    if len(authorized) != 2:
+        failures += fail(f"{len(authorized)} authorization span(s), expected 2")
+    planning = [
+        labels
+        for labels in by_name.get(telemetry.SPAN_REASONING_CHAIN, [])
+        if attribute(labels, telemetry.ATTR_REASONING_STEP) == "planning"
+    ]
+    if len(planning) != 2:
+        failures += fail(
+            f"{len(planning)} planning reasoning chain(s), expected 2 -- "
+            "a third means the Planner was asked again after the budget was spent"
+        )
+    if not failures:
+        print("    ok  bounded        2 attempts numbered 1 and 2, and nothing at 3")
+    return failures
+
+
 def check_spans(spans: list[Any], expect_belief: bool) -> int:
     """The trace half. `predicate_id` is the pairing that makes "pre-declared" checkable."""
     failures = 0
@@ -232,53 +301,70 @@ def check_spans(spans: list[Any], expect_belief: bool) -> int:
     verified = by_name.get(telemetry.SPAN_VERIFICATION_OUTCOME, [])
     committed = by_name.get(telemetry.SPAN_BELIEF_COMMIT, [])
 
+    # One verification on the INCONCLUSIVE half; two on the REFUTED one, because item 20
+    # re-plans the first refutation and the switch fails the retry the same way.
+    expected_verifications = 2 if expect_belief else 1
     if len(incidents) != 1:
         return fail(f"{len(incidents)} incident span(s) on the trace, expected 1")
-    if len(verified) != 1:
-        return fail(f"{len(verified)} verification span(s), expected 1")
+    if len(verified) != expected_verifications:
+        return fail(f"{len(verified)} verification span(s), expected {expected_verifications}")
+    if expect_belief:
+        failures += check_attempts(by_name, verified)
 
+    # The incident span carries the *last* attempt's predicate: it is set from
+    # `scratch.validated` when the root span closes, and the retry replaces it. So the pairing
+    # asserted live is the final attempt's; each attempt's own is held offline by
+    # `test_the_verification_span_carries_the_predicate_declared_before_execution`.
+    last = max(verified, key=lambda labels: int(labels.get(telemetry.ATTR_VERIFICATION_ATTEMPT, 1)))
     declared = attribute(incidents[0], telemetry.ATTR_INCIDENT_PREDICATE_ID)
-    checked = attribute(verified[0], telemetry.ATTR_VERIFICATION_PREDICATE_ID)
+    checked = attribute(last, telemetry.ATTR_VERIFICATION_PREDICATE_ID)
     if not declared or declared != checked:
         failures += fail(f"predicate {checked!r} was verified, {declared!r} was declared")
 
     expected_outcome = "REFUTED" if expect_belief else "INCONCLUSIVE"
-    if attribute(verified[0], telemetry.ATTR_VERIFICATION_OUTCOME) != expected_outcome:
-        failures += fail(
-            f"the verification span says "
-            f"{attribute(verified[0], telemetry.ATTR_VERIFICATION_OUTCOME)}, "
-            f"expected {expected_outcome}"
-        )
-    written = attribute(verified[0], telemetry.ATTR_VERIFICATION_BELIEF_WRITTEN)
-    if str(written).lower() != str(expect_belief).lower():
-        failures += fail(f"belief_written is {written}, expected {expect_belief}")
+    for labels in verified:
+        outcome = attribute(labels, telemetry.ATTR_VERIFICATION_OUTCOME)
+        if outcome != expected_outcome:
+            failures += fail(f"a verification span says {outcome}, expected {expected_outcome}")
+        flag = attribute(labels, telemetry.ATTR_VERIFICATION_BELIEF_WRITTEN)
+        if str(flag).lower() != str(expect_belief).lower():
+            failures += fail(f"belief_written is {flag}, expected {expect_belief}")
+    written = attribute(last, telemetry.ATTR_VERIFICATION_BELIEF_WRITTEN)
 
-    if len(committed) != int(expect_belief):
-        failures += fail(f"{len(committed)} belief.commit span(s), expected {int(expect_belief)}")
+    # One commit per verification that learned something, so two on the retried half and none
+    # at all on the ambiguous one -- §7.2's third row is an absence.
+    expected_commits = expected_verifications if expect_belief else 0
+    if len(committed) != expected_commits:
+        failures += fail(f"{len(committed)} belief.commit span(s), expected {expected_commits}")
     elif expect_belief:
-        labels = committed[0]
-        # The belief span borrows `provenance.decision.*` for its outcome, reason and
-        # signature -- item 2 gave the two pipelines one vocabulary rather than two.
-        if attribute(labels, telemetry.ATTR_DECISION_OUTCOME) != "COMMIT":
-            failures += fail(
-                f"the belief span says {attribute(labels, telemetry.ATTR_DECISION_OUTCOME)}/"
-                f"{attribute(labels, telemetry.ATTR_DECISION_REASON)}"
-            )
-        if attribute(labels, telemetry.ATTR_BELIEF_STATUS) != incident.REFUTED_STATUS:
-            failures += fail(
-                f"the belief span's status is "
-                f"{attribute(labels, telemetry.ATTR_BELIEF_STATUS)}, "
-                f"expected {incident.REFUTED_STATUS}"
-            )
-        if attribute(labels, telemetry.ATTR_BELIEF_SUPERSEDES) is not None:
-            failures += fail("a first belief supersedes nothing")
-        if not attribute(labels, telemetry.ATTR_DECISION_SIGNATURE):
-            failures += fail("the belief.commit span carries no signature")
+        for labels in committed:
+            # The belief span borrows `provenance.decision.*` for its outcome, reason and
+            # signature -- item 2 gave the two pipelines one vocabulary rather than two.
+            if attribute(labels, telemetry.ATTR_DECISION_OUTCOME) != "COMMIT":
+                failures += fail(
+                    f"a belief span says {attribute(labels, telemetry.ATTR_DECISION_OUTCOME)}/"
+                    f"{attribute(labels, telemetry.ATTR_DECISION_REASON)}"
+                )
+            if attribute(labels, telemetry.ATTR_BELIEF_STATUS) != incident.REFUTED_STATUS:
+                failures += fail(
+                    f"a belief span's status is "
+                    f"{attribute(labels, telemetry.ATTR_BELIEF_STATUS)}, "
+                    f"expected {incident.REFUTED_STATUS}"
+                )
+            if not attribute(labels, telemetry.ATTR_DECISION_SIGNATURE):
+                failures += fail("a belief.commit span carries no signature")
+        # Which commit is which, by what it says rather than by where it sits: Cloud Trace
+        # returns spans in no promised order, and item 20's whole belief story is that one of
+        # these two opened the chain and the other re-affirmed it. A first belief supersedes
+        # nothing; the retry's names its predecessor rather than opening a second chain.
+        chain = {attribute(labels, telemetry.ATTR_BELIEF_SUPERSEDES) for labels in committed}
+        if chain != {None, "1"}:
+            failures += fail(f"the belief spans supersede {chain}, expected one v1 and one v2")
 
     if not failures:
         print(
-            f"    ok  trace          {expected_outcome} on predicate {declared}, declared "
-            f"before execution; belief_written={written}"
+            f"    ok  trace          {expected_outcome} x{len(verified)} on predicate "
+            f"{declared}, declared before execution; belief_written={written}"
         )
     return failures
 
@@ -328,15 +414,36 @@ async def one_half(
                     "still deploys v41,\n          so a version-only predicate is honestly "
                     "CONFIRMED — re-run rather than reading this as a defect."
                 )
+            # The retry's hazard, and the mirror of the one above. The retry prompt hands the
+            # Planner the rate its last attempt left behind, and a threshold at or above that
+            # value is satisfied by the failure itself -- so the refutation verifies as a
+            # success. Observed live before `incident.py` gave the retry predicate a ceiling.
+            # Assert-only and in the script for item 11.5's reason: a regex over natural
+            # language on the production path would spend a retry budget on something that is
+            # not a schema failure.
+            elif switch == "rollback_fails" and max(thresholds(predicate)) >= SPIKED_ERROR_RATE:
+                print(
+                    f"    WARN  the predicate's threshold is at or above {SPIKED_ERROR_RATE}, "
+                    "the rate the failed rollback\n          left behind, so it is satisfied by "
+                    "the failure. Any CONFIRMED below is that, not a\n          working "
+                    "remediation — re-run rather than reading it as a defect."
+                )
         print(f"    verification {result.verification}   belief {result.belief}")
 
         expect_belief = switch == "rollback_fails"
         checker = check_refuted if expect_belief else check_inconclusive
         failures = checker(result, sync_client)
         # Read before the teardown removes it: the ledger records the authorized action either
-        # way, because the action *was* authorized -- what differs is what came of it.
-        if len(authorizations_for_target(sync_client)) != 1:
-            failures += fail("expected exactly one authorization ledger record")
+        # way, because the action *was* authorized -- what differs is what came of it. The
+        # retried half records two, and that is correct rather than a duplicate: item 20 goes
+        # back through the gateway for the second attempt, so two actions really were
+        # authorized and §6.4 has to be able to flag either.
+        expected_records = 2 if expect_belief else 1
+        records = authorizations_for_target(sync_client)
+        if len(records) != expected_records:
+            failures += fail(
+                f"{len(records)} authorization ledger record(s), expected {expected_records}"
+            )
     finally:
         print("--> restoring: v42, nominal error rate, all switches off, belief and ledger gone")
         restore(sync_client)

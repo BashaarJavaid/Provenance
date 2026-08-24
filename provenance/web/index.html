@@ -239,8 +239,11 @@
     if (!s) { box.className = ""; return; }
     const a = s.attrs, outcome = a["provenance.incident.outcome"];
     // The verdict lives here rather than in the fleet view: verification is a judgement the
-    // control loop emits (§7.2), not an agent with a current state.
-    const v = trace.find(x => x.name === SPAN.verify);
+    // control loop emits (§7.2), not an agent with a current state. The *last* one, because
+    // item 20's bounded retry can produce two — showing the first would leave a judge watching
+    // attempt 1's REFUTED while the fleet is already on attempt 2.
+    const verifications = trace.filter(x => x.name === SPAN.verify);
+    const v = verifications[verifications.length - 1];
     const verdict = v && v.attrs["provenance.verification.outcome"];
     box.className = "live " + (s.running ? "" : cls(s));
     const f = (k, v) => v === undefined ? "" : `<span><span class="k">${k}</span> <b>${esc(v)}</b></span>`;
@@ -256,7 +259,8 @@
       (verdict
         ? `<span><span class="k">verification</span> <b class="verdict ` +
           `${verdict === "CONFIRMED" ? "ok" : verdict === "REFUTED" ? "err" : "warn"}">${esc(verdict)}</b>` +
-          `<span class="k"> · belief ${v.attrs["provenance.verification.belief_written"] ? "written" : "not written"}</span></span>`
+          `<span class="k"> · attempt ${esc(v.attrs["provenance.verification.attempt"])}` +
+          ` · belief ${v.attrs["provenance.verification.belief_written"] ? "written" : "not written"}</span></span>`
         : "") +
       `<span><span class="k">outcome</span> <b class="verdict ${outcome ? cls(s) : ""}">${esc(outcome ?? "running…")}</b></span>`;
   }

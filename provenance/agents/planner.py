@@ -17,6 +17,12 @@ version-binding check working.
 
 The private key never appears here: `incident.py` loads it once per process and calls
 `credentials.mint()` itself. This module builds an agent and reshapes its output, nothing more.
+
+Two feedback slots, both empty on a first pass and both filled by the control loop, never by an
+agent: `{malformed_feedback}` is §7.1's schema rejection (item 9) and `{refutation_feedback}` is
+§7.2's refuted remediation (item 20). They stay separate because they say different things -- one
+is "that was not a valid action", the other is "that action ran and did not work" -- and a Planner
+that cannot tell them apart cannot respond to either.
 """
 
 from __future__ import annotations
@@ -101,6 +107,7 @@ def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent
             "executor reads the known-good version from the entity model, so a version in "
             "your sentence is something to be checked and never something to be obeyed.\n"
             "{malformed_feedback}"
+            "{refutation_feedback}"
         ),
         output_schema=Proposal,
         output_key=OUTPUT_KEY,

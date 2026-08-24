@@ -279,6 +279,10 @@ def check_result(result: incident.IncidentResult, *, expect_version: int = 1) ->
         fail(f"the incident ended {result.outcome}, not RESOLVED")
     if result.malformed_attempts:
         fail(f"the Planner needed {result.malformed_attempts} re-plan(s); expected none")
+    # Item 20's budget must stay unspent on this path: a CONFIRMED verification is not retried,
+    # and a non-zero count here would mean the incident reached RESOLVED the long way round.
+    if result.refuted_attempts:
+        fail(f"{result.refuted_attempts} refutation(s) on a run that ended RESOLVED")
 
     if result.action is None:
         fail("no typed Action was produced")

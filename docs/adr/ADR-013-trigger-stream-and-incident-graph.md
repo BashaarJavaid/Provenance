@@ -93,7 +93,10 @@ these nodes are appended, not reshaped), persist an incident, park or resume a h
 30's Task API; a HOLD here simply ends the incident with `outcome=HELD`), recall anything
 (recall returned empty until item 16, which filled it in `provenance/recall.py` without reshaping the graph — the step exists so item 18 fills a slot
 rather than reshaping a graph), render anything (item 11 owns all six §8.2 surfaces), or
-implement item 20's `REFUTED` retry budget.
+implement item 20's `REFUTED` retry budget — **since built, in
+[`ADR-023`](./ADR-023-the-bounded-retry.md), as one more conditional edge on this same graph and
+nothing else structural, which is the clearest evidence available that reason 3 chose the right
+runtime.**
 
 **Revisit when:** a second incident can run concurrently (the per-incident graph is already
 safe; what is not yet is the single `InMemorySessionService` per run being thrown away, which
