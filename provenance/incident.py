@@ -11,14 +11,18 @@ the validation node back to the Planner, not a `while` loop hidden in a prompt.
                                             `-> halt (UNROUTABLE)                 |-> planner (REPLAN)
                                                                                   `-> halt (ESCALATE)
 
-    authorize ?-> execute ?-> verification -> resolve      (item 10)
-              |           `-> halt (execution failed)
+    authorize ?-> execute ?-> verification -> resolve ?-> halt (DONE)    (items 10, 20)
+              |           `-> halt (execution failed)  `-> planner (REPLAN)
               `-> halt (HELD | DENIED)
 
 Four properties this file is responsible for, and no other file is:
 
-1. **The malformed count.** §7.1: "no agent owns its own iteration count -- the control loop
-   does, in code." `action.outcome_for()` shipped in item 6 with no caller for exactly this.
+1. **Both §7.1 counts.** "No agent owns its own iteration count -- the control loop does, in
+   code." The malformed count is `scratch.malformed_attempts` against `action.outcome_for()`,
+   which shipped in item 6 with no caller for exactly this; the refutation count is
+   `scratch.refuted_attempts` against `REFUTED_RETRY_BUDGET` (item 20). They are separate
+   budgets because §7.1 states them as separate bullets: a schema slip and a failed remediation
+   are different failures, and spending one on the other would be a coincidence of arithmetic.
 2. **The root span.** Item 2 shipped four span shapes and recorded that the incident root
    "arrives with the Orchestrator in item 9". Everything else nests under it.
 3. **Nothing reaches a state-mutating action except through the gateway** (§1.1 property 1).
@@ -32,9 +36,10 @@ Four properties this file is responsible for, and no other file is:
    knowledge (item 19); `INCONCLUSIVE` writes nothing at all -- no partial credit.
 
 Item 10 appended `execute`, the Verification Agent and `resolve`, and gave `authorize` a
-`ctx.route`; nothing else about the item-9 graph changed. `resolve` is the node that opens
-the `verification.outcome` span, because `belief_written` is not known until the commit has
-been attempted -- so the `belief.commit` span nests inside it.
+`ctx.route`; nothing else about the item-9 graph changed. Item 20 gave `resolve` one too, and
+added the one edge §7.2's `REFUTED` row has always described: back to the Planner, once.
+`resolve` is the node that opens the `verification.outcome` span, because `belief_written` is
+not known until the commit has been attempted -- so the `belief.commit` span nests inside it.
 
 Agents and the graph are built per incident. Two runs must not share the per-invocation
 tracing state in `_reasoning.py`, and a test must be able to substitute a fake model without
@@ -122,6 +127,13 @@ _LEARNS_FROM: dict[VerificationOutcome, str] = {
     "REFUTED": REFUTED_STATUS,
 }
 
+# §7.1: "one bounded re-plan after a `REFUTED` verification, then mandatory escalation. No agent
+# owns its own iteration count -- the control loop does, in code" (item 20). It lives here and not
+# beside `action.MALFORMED_RETRY_BUDGET` because that module is about the shape of an Action, and
+# a remediation that executed and did not work is not a schema fact. Separate from the malformed
+# budget on purpose: §7.1 states them as two bullets, and one incident may spend both.
+REFUTED_RETRY_BUDGET = 1
+
 _APP = "provenance"
 
 
@@ -152,6 +164,11 @@ class IncidentResult:
 
     `ESCALATED` with a `belief` set is item 19's shape and is not a contradiction: a refuted
     remediation taught the fleet something and still left the incident open for a human.
+
+    After item 20 an incident can make two attempts, and the four fields below report the **last**
+    one -- the decision that was signed most recently, the action that ran most recently, and the
+    belief version that stands. `refuted_attempts` is what says there was more than one; the trace
+    is where each attempt is individually visible.
     """
 
     incident_id: str
@@ -159,6 +176,7 @@ class IncidentResult:
     decision: gateway.Decision | None
     action: action.Action | None
     malformed_attempts: int
+    refuted_attempts: int = 0
     execution: executor.ExecutionResult | None = None
     verification: VerificationOutcome | None = None
     belief: policy.BeliefCommit | None = None
@@ -184,9 +202,15 @@ class _Scratch:
     validated: action.Action | None = None
     proposal: dict[str, Any] | None = None
     malformed_attempts: int = 0
+    refuted_attempts: int = 0
     reasons: list[str] = field(default_factory=list)
     execution: executor.ExecutionResult | None = None
     post_state: executor.ServiceState | None = None
+    # When `post_state` was read, on the caller's clock. Per attempt, because §2.2's novelty
+    # check compares `(source_id, observed_at)` pairs: two attempts stamped with the incident's
+    # frozen `now` would be one observation twice, refused NO_NEW_EVIDENCE -- a *counted*
+    # rejection, so an honest agent would lose standing for reporting its own failure (item 20).
+    observed_at: datetime | None = None
     verification: VerificationOutcome | None = None
     belief: policy.BeliefCommit | None = None
 
@@ -235,12 +259,24 @@ def _seed_state(
         # "less than 1%" and could not see it had landed on the baseline.
         "nominal_error_rate": service.error_rate,
         "nominal_error_rate_pct": f"{service.error_rate * 100:g}",
-        "known_action_classes": ", ".join(tool.action_class for tool in tools.TOOLS),
+        # Each class with the entity kind it acts on, off the tool registry -- the authority,
+        # not a hint. Observed live in item 20: told only that `DISABLE_COMPLIANCE_CHECKS`
+        # existed, a Planner whose rollback had just been refuted proposed it against a
+        # *service*, and `action.validate()` rejected it as it should. A model asked to pick an
+        # action class from a list cannot pick well without knowing what each one acts on, and
+        # this is the one place that fact was being dropped on the way to the prompt.
+        "known_action_classes": ", ".join(
+            f"{tool.action_class} (acts on a {tool.target_kind})" for tool in tools.TOOLS
+        ),
         "planner_identity": f"{PLANNER_ID}@{planner_version}",
         "recall_summary": recalled.summary(),
         _reasoning.RECALL_BELIEF_IDS: list(recalled.belief_ids),
         _reasoning.RECALL_NOMINATED_IDS: list(recalled.nominated_ids),
         "malformed_feedback": "",
+        # Item 20's channel, and deliberately not the one above: a schema rejection and a
+        # remediation that ran and did not work are different things to tell a Planner, and
+        # item 9's re-plan test asserts on its own key.
+        "refutation_feedback": "",
         "diagnosis_summary": "",
         # Item 10. The Verification Agent's instruction interpolates all three, and the
         # `execute` node overwrites them with what it measured; seeded here because an
@@ -264,6 +300,11 @@ def build_graph(
     model_verification: str | object,
 ) -> Workflow:
     """The §2.1 + §7.1 routing graph. Every node but the four agents is deterministic code."""
+    # `now` is the caller's clock and is frozen for the incident, which is what lets a test pin
+    # every timestamp. An observation still has to say *when* it was made, so each attempt's is
+    # that base advanced by the time that actually passed. Offline both attempts land inside one
+    # second and truncate back to `now`; live they are a model call apart (item 20).
+    wall_start = datetime.now(UTC)
     orchestrator_agent = orchestrator.build(
         model_orchestrator,
         agent_id=ORCHESTRATOR_ID,
@@ -379,6 +420,7 @@ def build_graph(
                 scratch.validated, scratch.decision, client=client
             )
             scratch.post_state = await executor.read_state(scratch.validated.target, client=client)
+            scratch.observed_at = now + (datetime.now(UTC) - wall_start)
         except executor.ExecutionError as error:
             # §7.3's default posture, made a row in that table: an execution that did not
             # happen verifies nothing and teaches nothing.
@@ -400,12 +442,16 @@ def build_graph(
         ctx.route = "VERIFY"
 
     async def resolve(ctx: Context, verification: dict[str, Any]) -> None:
-        """§7.2's table: what was learned, and whether the incident is over.
+        """§7.2's table: what was learned, whether the incident is over, and §7.1's second budget.
 
         The parameter name is load-bearing: ADK resolves a node's arguments out of session
         state by name, so this must be the agent's `output_key`. Same rule as `hand_off`'s
         `diagnosis` and `validate`'s `proposal`. It shadows the module of the same name,
         which is why `verification_agent` is bound above rather than built here.
+
+        Only `REFUTED` is retried (item 20). `INCONCLUSIVE` is not: §7.2 gives it its own row --
+        escalate, learn nothing -- and re-planning against measurements that settled nothing
+        would be spending a model call on the same question.
         """
         await _resolve(
             scratch,
@@ -416,6 +462,49 @@ def build_graph(
             now=now,
             client=client,
         )
+        if scratch.verification != "REFUTED" or scratch.refuted_attempts > REFUTED_RETRY_BUDGET:
+            ctx.route = "DONE"
+            return
+        assert scratch.validated is not None and scratch.post_state is not None
+        # The Planner was told the fixture's version at wake time, and the rollback has moved it
+        # since. Re-planning against a version the system no longer has is a re-plan aimed at the
+        # wrong world, so the measured post-state replaces it before the prompt is rebuilt.
+        ctx.state["current_config_version"] = scratch.post_state.config_version
+        # The kind constraint is restated deliberately, and observed live before it was. Told
+        # only that its remediation had failed, the Planner concluded the config was innocent
+        # and reached for the fleet's other tool -- `DISABLE_COMPLIANCE_CHECKS(inventory-api)`,
+        # a supplier-scoped action aimed at a service. `action.validate()` rejected it as it
+        # should, twice, and the incident escalated on the *malformed* budget having never made
+        # its second attempt: §7.1's first bullet working and item 20 starved by it. Naming the
+        # kind beside each class in `known_action_classes` was not enough on its own, because a
+        # model that wants a different class resolves the conflict by keeping the target. So the
+        # kind is stated here as the fact it is, read from the tool registry rather than written
+        # down: item 21's supply-chain agent gets the right word for free.
+        kind = tools.tool_for(scratch.validated.action_class).target_kind
+        ctx.state["refutation_feedback"] = (
+            "Your previous action executed and its result was REFUTED. You declared: "
+            f"{scratch.validated.success_predicate!r}. After it ran, the measured error rate on "
+            f"{scratch.validated.target} was {scratch.post_state.error_rate} and the deployed "
+            f"config version was {scratch.post_state.config_version}. This is the final attempt "
+            f"before the incident escalates to a human. Emit one action again. "
+            f"{scratch.validated.target} is a {kind}, and every action class acts only on the "
+            f"entity kind named beside it above, so a class for any other kind is not available "
+            f"to you here. Re-proposing the same remediation is allowed and is often the right "
+            "answer -- say what you expect to be different. An action outside those rules is "
+            "rejected before authorization and spends this attempt on nothing.\n"
+            # Item 11.5 gave the predicate a floor: a threshold at the nominal rate is
+            # unsatisfiable however well the remediation works. Handing the Planner the *failed*
+            # measurement introduces the opposite hazard, and it was observed on the first live
+            # run that got this far: told the rate was 0.38, it declared "below 0.40" and its own
+            # refutation became a CONFIRMED. So the retry's predicate needs a ceiling too. Both
+            # bounds say one thing -- a predicate has to be satisfiable by success and
+            # unsatisfiable by the failure it is meant to clear.
+            "The success predicate you declare now must name an error-rate threshold strictly "
+            f"between the nominal rate given above and {scratch.post_state.error_rate}, the rate "
+            "measured after the failed attempt. A threshold at or above that measured value "
+            "would be satisfied by the very state that refuted your last predicate."
+        )
+        ctx.route = "REPLAN"
 
     def halt() -> None:
         """The terminal node for every branch that stops before the fleet has learned."""
@@ -433,6 +522,8 @@ def build_graph(
             (authorize, {"EXECUTE": execute, "HALT": halt}),
             (execute, {"VERIFY": verification_agent, "HALT": halt}),
             (verification_agent, resolve),
+            # §7.1's second bounded loop, and the one §7.2's REFUTED row has always described.
+            (resolve, {"REPLAN": planner_agent, "DONE": halt}),
         ],
     )
 
@@ -474,7 +565,14 @@ async def _resolve(
 
     The span carries `action.predicate_id()`, byte-identical to the one the incident span
     already carried before anything executed. That pairing is what makes "declared before
-    execution" checkable in the trace rather than asserted in a doc.
+    execution" checkable in the trace rather than asserted in a doc. On a retried incident the
+    incident span carries the *last* attempt's predicate, because it is set from
+    `scratch.validated` when the root span closes; each attempt's own pairing is one
+    `verification.outcome` span.
+
+    `attempt` is `refuted_attempts + 1` rather than a second counter: a retry only ever follows a
+    refutation, so "refutations so far" and "which attempt this is" are the same number offset by
+    one. It is read *before* the outcome is known, which is why the increment below happens after.
 
     `set_outcome` runs on every path, including the one where the commit was refused, so the
     span can never exit unrecorded (§8.1).
@@ -486,10 +584,12 @@ async def _resolve(
         model=model,
         action_class=validated.action_class,
         target=validated.target,
-        attempt=1,  # Item 20's bounded re-plan is what makes this ever exceed 1.
+        attempt=scratch.refuted_attempts + 1,
     ) as rec:
         outcome = _verification_outcome(verified)
         scratch.verification = outcome
+        if outcome == "REFUTED":
+            scratch.refuted_attempts += 1
         if outcome in _LEARNS_FROM:
             scratch.belief = await _commit_belief(
                 scratch,
@@ -526,10 +626,16 @@ async def _commit_belief(
     write the same predicate sentence share that hash while observing at different times, and
     `beliefs.append()` is create-if-absent, so the second write was discarded and the stored
     document kept the first run's timestamp. §2.2's novelty check reads those documents.
+
+    `observed_at` is the attempt's own read time (item 20), falling back to `now` for a caller
+    that reaches here with no execution behind it. It is the same defect one level up: two
+    attempts of one incident stamped with the frozen `now` are one observation cited twice, and
+    §2.2 would refuse the second NO_NEW_EVIDENCE -- a counted rejection, so an agent would lose
+    standing for honestly reporting that its own remediation failed twice.
     """
     assert scratch.validated is not None and scratch.post_state is not None
     validated = scratch.validated
-    observed_at = now.astimezone(UTC).strftime(beliefs.TIMESTAMP)
+    observed_at = (scratch.observed_at or now).astimezone(UTC).strftime(beliefs.TIMESTAMP)
     source_id = f"firestore:{executor.SERVICES}/{validated.target}"
     evidence = beliefs.Evidence(
         id=beliefs.evidence_id(source_id, observed_at),
@@ -679,6 +785,7 @@ async def run_incident(
         decision=scratch.decision,
         action=scratch.validated,
         malformed_attempts=scratch.malformed_attempts,
+        refuted_attempts=scratch.refuted_attempts,
         execution=scratch.execution,
         verification=scratch.verification,
         belief=scratch.belief,

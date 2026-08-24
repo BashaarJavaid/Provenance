@@ -176,6 +176,7 @@ async def trigger(
         "incident_id": result.incident_id,
         "outcome": result.outcome,
         "malformed_attempts": result.malformed_attempts,
+        "refuted_attempts": result.refuted_attempts,
         "action": None if result.action is None else asdict(result.action),
         "decision": None if result.decision is None else asdict(result.decision),
         # Item 10. All three are null unless the path was taken: a held incident executes
