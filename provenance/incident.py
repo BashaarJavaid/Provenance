@@ -50,13 +50,14 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, get_args
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -77,17 +78,54 @@ from provenance import (
     telemetry,
     tools,
 )
-from provenance.agents import _reasoning, orchestrator, planner, sre_infra, verification
+from provenance.agents import (
+    _reasoning,
+    orchestrator,
+    planner,
+    sre_infra,
+    supply_chain,
+    verification,
+)
 from provenance.synthetic import company
-from provenance.telemetry import IncidentOutcome, TriggerSignal, VerificationOutcome
+from provenance.telemetry import IncidentOutcome, TargetKind, TriggerSignal, VerificationOutcome
 
-# The one place a domain becomes routable: name -> (agent id, what the domain covers).
-# Item 21 adds one entry and one agent file and changes nothing else here, which is what
-# item 22 measures. The scope travels with the mapping because the Orchestrator's vocabulary
-# and the routing table have to be the same list: a domain it can name but not reach, or
-# reach but not name, is a silently unroutable incident.
-DOMAINS: dict[str, tuple[str, str]] = {
-    sre_infra.DOMAIN: ("sre-infra-agent", sre_infra.DOMAIN_SCOPE),
+
+@dataclass(frozen=True)
+class Domain:
+    """One routable domain: who owns it, what it covers, what it acts on, how it is built.
+
+    The scope travels with the mapping because the Orchestrator's vocabulary and the routing
+    table have to be the same list: a domain it can name but not reach, or reach but not name,
+    is a silently unroutable incident. `target_kind` is item 21's addition and is read twice --
+    `route` refuses a classification whose kind does not match the target's, and the seeders
+    below use it to decide whether an incident is theirs.
+    """
+
+    agent_id: str
+    scope: str
+    target_kind: TargetKind
+    build: Callable[..., LlmAgent]
+    seed: Callable[..., dict[str, Any]]
+
+
+# The one place a domain becomes routable. Item 21 adds one entry and one agent file; the graph,
+# the seeding and the Orchestrator's vocabulary are all comprehended out of this dict, so a
+# third domain adds nothing below it either. That is what item 22 measures.
+DOMAINS: dict[str, Domain] = {
+    sre_infra.DOMAIN: Domain(
+        agent_id="sre-infra-agent",
+        scope=sre_infra.DOMAIN_SCOPE,
+        target_kind="service",
+        build=sre_infra.build,
+        seed=sre_infra.seed_state,
+    ),
+    supply_chain.DOMAIN: Domain(
+        agent_id="supply-chain-agent",
+        scope=supply_chain.DOMAIN_SCOPE,
+        target_kind="supplier",
+        build=supply_chain.build,
+        seed=supply_chain.seed_state,
+    ),
 }
 
 PLANNER_ID = "remediation-planner"
@@ -238,27 +276,28 @@ def _seed_state(
 ) -> dict[str, Any]:
     """Everything an agent instruction interpolates. Facts come from authorities, not the trigger.
 
-    The trigger reports what was observed; the tier, the config versions and the description
-    are read from the entity model, which is the same authority `action.validate()` checks the
-    Planner's declared tier against. A trigger that lied about a tier would change no prompt.
+    The trigger reports what was observed; the tier and the description are read from the
+    entity model, which is the same authority `action.validate()` checks the Planner's declared
+    tier against. A trigger that lied about a tier would change no prompt.
+
+    Only the keys every incident shares live here. Whatever one domain's prompts name comes
+    from that domain's own `seed_state()` and is merged in below -- item 21, and the reason it
+    is a merge rather than a lookup is that state is seeded *before* the Orchestrator has
+    classified anything, so there is no domain to key on yet. Every seeder runs on every
+    incident and returns its own keys either way, which is what makes a mis-classification end
+    `UNROUTABLE` at the routing node rather than raise at interpolation time.
+
+    Seeders must therefore own **disjoint** key sets, since a later one would otherwise
+    overwrite an earlier one's value. `tests/test_incident.py` asserts that they do.
     """
-    service = company.service(trigger.target)
-    return {
+    entity = company.described(trigger.target)
+    shared: dict[str, Any] = {
         "trigger_target": trigger.target,
         "trigger_signal": trigger.signal,
         "trigger_observed_value": trigger.observed_value,
         "trigger_observed_at": trigger.observed_at,
-        "target_tier": service.tier,
-        "target_description": service.description,
-        "current_config_version": service.current_config_version or "unknown",
-        "known_good_version": service.known_good_version or "unknown",
-        # Item 11.5. What healthy looks like, from the frozen fixture and never from the
-        # trigger: `executor.execute()` writes this exact value back on a successful rollback,
-        # so a Planner told the *spiked* rate would declare a threshold no success can satisfy.
-        # Both units because the defect was a units collision -- the model translated 0.01 into
-        # "less than 1%" and could not see it had landed on the baseline.
-        "nominal_error_rate": service.error_rate,
-        "nominal_error_rate_pct": f"{service.error_rate * 100:g}",
+        "target_tier": entity.tier,
+        "target_description": entity.description,
         # Each class with the entity kind it acts on, off the tool registry -- the authority,
         # not a hint. Observed live in item 20: told only that `DISABLE_COMPLIANCE_CHECKS`
         # existed, a Planner whose rollback had just been refuted proposed it against a
@@ -278,17 +317,27 @@ def _seed_state(
         # item 9's re-plan test asserts on its own key.
         "refutation_feedback": "",
         "diagnosis_summary": "",
+        # The routed domain's own facts and predicate rules (item 21). Empty here and filled by
+        # whichever seeder below owns this target's kind -- the one key seeders share, which is
+        # why each returns it only for a target of its own kind.
+        "planner_context": "",
         # Item 10. The Verification Agent's instruction interpolates all three, and the
         # `execute` node overwrites them with what it measured; seeded here because an
         # instruction naming a key that was never seeded fails at interpolation time.
         "success_predicate": "",
         "post_error_rate": trigger.observed_value,
-        "post_config_version": service.current_config_version or "unknown",
+        # A *post*-state nothing has measured yet, so it says so. `execute` overwrites all
+        # three before it can route to VERIFY, and no other node reads them.
+        "post_config_version": "unknown",
     }
+    for entry in DOMAINS.values():
+        shared |= entry.seed(trigger)
+    return shared
 
 
 def build_graph(
     *,
+    trigger: Trigger,
     scratch: _Scratch,
     planner_version: str,
     planner_key: ec.EllipticCurvePrivateKey,
@@ -309,18 +358,30 @@ def build_graph(
         model_orchestrator,
         agent_id=ORCHESTRATOR_ID,
         agent_version=ORCHESTRATOR_VERSION,
-        domains=tuple((name, scope) for name, (_, scope) in DOMAINS.items()),
+        domains=tuple((name, entry.scope) for name, entry in DOMAINS.items()),
     )
-    domain_agent = sre_infra.build(
-        model_domain, agent_id=DOMAINS[sre_infra.DOMAIN][0], agent_version="v1"
-    )
+    # One node per registered domain, and the edge map below is comprehended out of the same
+    # dict -- so a third domain adds no line here at all (item 21). Every agent is built even
+    # though at most one will run: the graph is constructed before the Orchestrator classifies,
+    # which is the same reason `_seed_state()` merges every seeder.
+    domain_agents = {
+        name: entry.build(model_domain, agent_id=entry.agent_id, agent_version="v1")
+        for name, entry in DOMAINS.items()
+    }
     planner_agent = planner.build(model_planner, agent_id=PLANNER_ID, agent_version=planner_version)
     verification_agent = verification.build(
         model_verification, agent_id=VERIFICATION_ID, agent_version=VERIFICATION_VERSION
     )
 
     def route(ctx: Context, classification: dict[str, Any]) -> None:
-        """Registry lookup, not judgement. An unclassifiable incident ends here, visibly."""
+        """Registry lookup, not judgement. An unclassifiable incident ends here, visibly.
+
+        The kind check is item 21's and is §7.3's default posture rather than a second
+        judgement: a domain agent handed an entity of the wrong kind can only diagnose the
+        placeholders its seeder returned for a target that is not its own, and a diagnosis
+        built on `"n/a"` is worse than no diagnosis. It is also what makes the merged seeding
+        above safe by construction instead of by the Orchestrator behaving.
+        """
         domain = str(classification.get("domain", ""))
         entry = DOMAINS.get(domain)
         if entry is None:
@@ -328,9 +389,17 @@ def build_graph(
             scratch.reasons.append(f"no agent registered for domain {domain!r}")
             ctx.route = "UNROUTABLE"
             return
+        kind = company.described(trigger.target).kind
+        if kind != entry.target_kind:
+            scratch.outcome = "UNROUTABLE"
+            scratch.reasons.append(
+                f"domain {domain!r} acts on a {entry.target_kind}, but {trigger.target} is a {kind}"
+            )
+            ctx.route = "UNROUTABLE"
+            return
         ctx.state["routed_domain"] = domain
-        ctx.state["routed_to"] = entry[0]
-        ctx.route = "ROUTED"
+        ctx.state["routed_to"] = entry.agent_id
+        ctx.route = domain
 
     def hand_off(ctx: Context, diagnosis: dict[str, Any]) -> None:
         """Give the Planner the diagnosis as text. §2.1 keeps diagnosing and proposing apart."""
@@ -468,8 +537,11 @@ def build_graph(
         assert scratch.validated is not None and scratch.post_state is not None
         # The Planner was told the fixture's version at wake time, and the rollback has moved it
         # since. Re-planning against a version the system no longer has is a re-plan aimed at the
-        # wrong world, so the measured post-state replaces it before the prompt is rebuilt.
-        ctx.state["current_config_version"] = scratch.post_state.config_version
+        # wrong world, so the routed domain re-seeds its own block from the measured post-state.
+        # Asking the domain rather than writing the key here is item 21: the version now lives
+        # inside a block only that domain knows the shape of.
+        routed = DOMAINS[str(ctx.state["routed_domain"])]
+        ctx.state.update(routed.seed(trigger, deployed_version=scratch.post_state.config_version))
         # The kind constraint is restated deliberately, and observed live before it was. Told
         # only that its remediation had failed, the Planner concluded the config was innocent
         # and reached for the fleet's other tool -- `DISABLE_COMPLIANCE_CHECKS(inventory-api)`,
@@ -514,8 +586,10 @@ def build_graph(
         edges=[
             (START, orchestrator_agent),
             (orchestrator_agent, route),
-            (route, {"ROUTED": domain_agent, "UNROUTABLE": halt}),
-            (domain_agent, hand_off),
+            # The ignore is ADK's: its edge-map value type is a wide union that a homogeneous
+            # `dict[str, LlmAgent]` does not unpack into, though every value here is a node.
+            (route, {**domain_agents, "UNROUTABLE": halt}),  # type: ignore[dict-item]
+            *((agent, hand_off) for agent in domain_agents.values()),
             (hand_off, planner_agent),
             (planner_agent, validate),
             (validate, {"AUTHORIZE": authorize, "REPLAN": planner_agent, "ESCALATE": halt}),
@@ -697,14 +771,15 @@ async def run_incident(
         trigger_signal=trigger.signal,
     ) as recorder:
         agent = await registry.get_agent(PLANNER_ID, client=client)
-        service = company.service(trigger.target)
+        entity = company.described(trigger.target)
         recalled = await recall.recall(
             trigger.target,
             recall.query_text(
                 target=trigger.target,
                 signal=trigger.signal,
-                tier=service.tier,
-                description=service.description,
+                kind=entity.kind,
+                tier=entity.tier,
+                description=entity.description,
                 observed_value=trigger.observed_value,
             ),
             client=client,
@@ -714,6 +789,7 @@ async def run_incident(
         state = _seed_state(trigger, agent.version, recalled)
 
         graph = build_graph(
+            trigger=trigger,
             scratch=scratch,
             planner_version=agent.version,
             planner_key=planner_key or load_planner_key(),

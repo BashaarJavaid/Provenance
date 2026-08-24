@@ -315,6 +315,39 @@ def test_an_unroutable_incident_carries_no_routing_and_no_predicate(
     assert "provenance.incident.predicate_id" not in keys
 
 
+def test_the_second_domains_trigger_signal_is_in_the_vocabulary(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 21 added `compliance_lapse` under item 2's condition: module, §8.1 and this file.
+
+    A supplier whose certification has lapsed is not an error rate, and the alternative --
+    widening the Literal to a plain `str` -- would have dropped the check below, which is the
+    only thing that makes this vocabulary a contract rather than a comment.
+    """
+    with telemetry.incident(
+        incident_id="inc-supply",
+        trigger_target="SUP-042",
+        trigger_signal="compliance_lapse",
+    ) as rec:
+        rec.set_outcome(outcome="HELD", malformed_attempts=0, predicate_id="0011223344556677")
+    span = _only(spans)
+    assert span.attributes is not None
+    assert span.attributes["provenance.incident.trigger_signal"] == "compliance_lapse"
+
+
+def test_a_trigger_signal_outside_the_vocabulary_still_raises() -> None:
+    """The check the Literal exists for, and the reason it did not become a plain `str`."""
+    with (
+        pytest.raises(ValueError),
+        telemetry.incident(
+            incident_id="inc-bogus",
+            trigger_target="SUP-042",
+            trigger_signal="vibes",  # type: ignore[arg-type]
+        ),
+    ):
+        pass
+
+
 def test_a_resolved_incident_is_not_an_error(spans: InMemorySpanExporter) -> None:
     """Item 10 added `RESOLVED`: executed, verified CONFIRMED, belief attempted.
 

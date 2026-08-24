@@ -26,6 +26,7 @@ from typing import Any
 from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.models.llm_response import LlmResponse
+from pydantic import BaseModel, Field
 
 from provenance import telemetry
 
@@ -35,6 +36,32 @@ from provenance import telemetry
 # the difference between them is what makes the drop visible rather than merely claimed.
 RECALL_BELIEF_IDS = "recall_belief_ids"
 RECALL_NOMINATED_IDS = "recall_nominated_ids"
+
+
+class Diagnosis(BaseModel):
+    """What a domain agent hands the Planner. Not an action, and not authority.
+
+    It lives here rather than in a domain file because it is a contract between the domain
+    layer and the Planner, not a fact about any one domain: `incident.hand_off` reads these
+    five fields by name for whichever agent ran. It was `sre_infra.Diagnosis` until item 21,
+    when a second domain would otherwise have had to either copy it -- two schemas one node
+    reads identically, which is two schemas that drift -- or import the SRE agent, which makes
+    the domain files a dependency chain rather than the peers §5.4's claim is about.
+    """
+
+    summary: str = Field(description="What is wrong, in one or two sentences.")
+    evidence_refs: list[str] = Field(
+        description="Short stable ids for the observations this rests on, e.g. obs-error-rate."
+    )
+    recommended_action_class: str = Field(
+        description="The action class that would address the cause, or NONE if unsure."
+    )
+    hypotheses_considered: int = Field(
+        description="How many distinct causes were genuinely weighed."
+    )
+    selected_hypothesis: str = Field(
+        description="A short snake_case label for the chosen cause, e.g. config_regression."
+    )
 
 
 def model_name(agent: LlmAgent) -> str:

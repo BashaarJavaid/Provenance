@@ -138,7 +138,7 @@ class Recalled:
 
 
 def query_text(
-    *, target: str, signal: str, tier: str, description: str, observed_value: float
+    *, target: str, signal: str, kind: str, tier: str, description: str, observed_value: float
 ) -> str:
     """§6.6's "queried with the incident's typed facts", as one deterministic string.
 
@@ -146,8 +146,14 @@ def query_text(
     and never by a model, so the same incident nominates the same candidates every run. Takes
     primitives rather than a `Trigger` because `Trigger` lives in `incident.py` and importing
     it here would close a cycle.
+
+    `kind` was the literal word "service" until item 21, which is the sort of thing that goes
+    unnoticed until a second domain arrives: a supplier incident would have queried the index
+    with a sentence calling its supplier a service. It comes from `company.described()`, the
+    same read the routing kind check makes, so the shape item 16 measured `SIMILARITY_FLOOR`
+    against is preserved rather than thinned out.
     """
-    return f"{signal} on {target}, a {tier} service ({description}); observed {observed_value}"
+    return f"{signal} on {target}, a {tier} {kind} ({description}); observed {observed_value}"
 
 
 async def _vertex_embed(texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:

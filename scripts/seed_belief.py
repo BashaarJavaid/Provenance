@@ -192,7 +192,7 @@ async def read_back(client: firestore.AsyncClient) -> None:
     print(f"--> 2 versions, {len(items)} evidence items, {len(classes)} distinct source classes")
 
     # The decay clock, written at commit though item 29 is what consumes it.
-    check(v2.half_life_days == policy.HALF_LIFE_DAYS, f"half life is {v2.half_life_days}")
+    check(v2.half_life_days == policy.HALF_LIFE_DAYS[DOMAIN], f"half life is {v2.half_life_days}")
     check(v2.on_expiry == policy.ON_EXPIRY, f"on_expiry is {v2.on_expiry}")
     check(v2.expires_at > v2.committed_at, "the decay clock does not run forward")
     print(
@@ -201,7 +201,9 @@ async def read_back(client: firestore.AsyncClient) -> None:
 
     # And the arithmetic the inspector will render, recomputed here from the stored citations.
     rows = policy.contributions(
-        items, now=datetime.strptime(v2.committed_at, beliefs.TIMESTAMP).replace(tzinfo=UTC)
+        items,
+        domain=DOMAIN,
+        now=datetime.strptime(v2.committed_at, beliefs.TIMESTAMP).replace(tzinfo=UTC),
     )
     for row in rows:
         print(

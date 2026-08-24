@@ -236,7 +236,7 @@ def _version(n: int, status: str, at: datetime, *evidence: beliefs.Evidence) -> 
         domain="supply-chain",
         entity="SUP-042",
         status=status,
-        confidence=policy.confidence(items, now=at),
+        confidence=policy.confidence(items, domain="supply-chain", now=at),
         threshold=0.50 if n == 1 else 0.70,
         evidence_ids=tuple(item.id for item in items),
         authority="supply-chain-agent@v1",

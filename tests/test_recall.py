@@ -31,6 +31,7 @@ ENTITY = "inventory-api"
 QUERY = recall.query_text(
     target=ENTITY,
     signal="error_rate_spike",
+    kind="service",
     tier="tier2",
     description="inventory availability and reservation API",
     observed_value=0.38,
@@ -227,11 +228,29 @@ def test_the_query_is_deterministic_and_written_by_no_model() -> None:
     assert QUERY == recall.query_text(
         target=ENTITY,
         signal="error_rate_spike",
+        kind="service",
         tier="tier2",
         description="inventory availability and reservation API",
         observed_value=0.38,
     )
     assert ENTITY in QUERY and "error_rate_spike" in QUERY
+
+
+def test_the_query_names_the_entity_kind_rather_than_assuming_service() -> None:
+    """Item 21. The word was the literal "service" until a second domain had suppliers in it."""
+    supplier_query = recall.query_text(
+        target="SUP-042",
+        signal="compliance_lapse",
+        kind="supplier",
+        tier="tier1",
+        description="Verdant Supply Co., a live_goods supplier (contract CTR-2024-0042)",
+        observed_value=14.0,
+    )
+    assert "a tier1 supplier" in supplier_query
+    assert "service" not in supplier_query
+    # And item 16's measured query shape is unchanged, which is what keeps SIMILARITY_FLOOR
+    # a number that was measured against this sentence rather than one like it.
+    assert "a tier2 service" in QUERY
 
 
 # --- the structural guards items 5, 6 and 12 use --------------------------------------------

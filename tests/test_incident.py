@@ -207,12 +207,13 @@ def run(
     store: FakeFirestore | None = None,
     now: datetime | None = None,
     embed: Any | None = None,
+    trigger: incident.Trigger | None = None,
 ) -> incident.IncidentResult:
     """One incident, with every model call answered from `replies` in order."""
     model = FakeLlm(model="fake-model", replies=list(replies), prompts=[])
     return asyncio.run(
         incident.run_incident(
-            a_trigger(),
+            trigger or a_trigger(),
             now=now,
             embed=embed,
             client=store if store is not None else a_store(),
@@ -1268,3 +1269,229 @@ def test_a_second_incident_supersedes_the_belief_the_first_one_wrote() -> None:
     cold, remembered = ledger(store)
     assert cold["belief_ids"] == [], "the first incident had nothing to recall"
     assert remembered["belief_ids"] == ["belief-inventory-api"]
+
+
+# --- the second domain (item 21) -----------------------------------------------------------
+
+
+def a_supplier_trigger(**overrides: Any) -> incident.Trigger:
+    """SUP-042's certification lapses and its shipments stop clearing compliance."""
+    return replace(
+        incident.Trigger(
+            target="SUP-042",
+            signal="compliance_lapse",
+            observed_value=14.0,
+            observed_at="2026-08-24T09:15:00Z",
+        ),
+        **overrides,
+    )
+
+
+def a_supply_chain_diagnosis() -> str:
+    return json.dumps(
+        {
+            "summary": "SUP-042's certification lapsed and shipments are held at compliance.",
+            "evidence_refs": ["obs-compliance-status", "obs-held-shipments"],
+            "recommended_action_class": "DISABLE_COMPLIANCE_CHECKS",
+            "hypotheses_considered": 3,
+            "selected_hypothesis": "certification_lapse",
+        }
+    )
+
+
+def a_supplier_proposal(**overrides: Any) -> str:
+    return json.dumps(
+        {
+            "action_class": "DISABLE_COMPLIANCE_CHECKS",
+            "target": "SUP-042",
+            "target_tier": "tier1",
+            "blast_radius": "org-wide",
+            "reversible": False,
+            "evidence_refs": ["obs-compliance-status"],
+            "success_predicate": "held shipments for SUP-042 fall below 1 within 60m",
+            "proposed_by": "remediation-planner@v3",
+            "hypotheses_considered": 2,
+            "selected_hypothesis": "unblock_compliance_gate",
+        }
+        | overrides
+    )
+
+
+def test_a_supplier_trigger_routes_diagnoses_and_proposes_through_the_same_control_plane(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 21's `verify:` line, with the models' cooperation stipulated rather than hoped for.
+
+    Three replies, not four: nothing executes, so the Verification Agent is never asked. The
+    empty reply queue is what says so -- `FakeLlm` raises on a fourth call.
+
+    *Which* agent diagnosed has to be asserted separately and against the span, because `FakeLlm`
+    answers whatever is next in the queue regardless of who asked: a graph that routed every
+    incident to the first domain in `DOMAINS` produces this same result object. Found by
+    mutation, not by design.
+    """
+    model = FakeLlm(
+        model="fake-model",
+        replies=[
+            a_classification("supply-chain"),
+            a_supply_chain_diagnosis(),
+            a_supplier_proposal(),
+        ],
+        prompts=[],
+    )
+    result = asyncio.run(
+        incident.run_incident(
+            a_supplier_trigger(),
+            client=a_store(),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+
+    root = next(s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_INCIDENT)
+    assert root.attributes is not None
+    assert root.attributes["provenance.incident.domain"] == "supply-chain"
+    assert root.attributes["provenance.incident.routed_to"] == "supply-chain-agent"
+    # And the agent that was actually invoked was the one that owns suppliers.
+    assert "You are the Supply-Chain agent" in model.prompts[1]
+    assert "contract of record" in model.prompts[1]
+
+    assert result.outcome == "HELD"
+    assert result.action is not None
+    assert (result.action.action_class, result.action.target) == (
+        "DISABLE_COMPLIANCE_CHECKS",
+        "SUP-042",
+    )
+    # Overruled by the tool registry and the entity model, never accepted from the Planner.
+    assert result.action.reversible is False
+    assert result.action.blast_radius == "org-wide"
+    assert result.action.target_tier == "tier1"
+    assert result.decision is not None
+    assert (result.decision.outcome, result.decision.stage) == ("HOLD", "risk")
+    assert result.decision.score is not None
+    # §4.2's second worked example, reached by an incident rather than by a table-driven test.
+    assert (
+        result.decision.score.base,
+        result.decision.score.criticality,
+        result.decision.score.blast,
+        result.decision.score.irreversibility,
+    ) == (4, 2, 2, 3)
+    assert result.decision.score.score == 11
+    # §7.2 without a branch: nothing ran, so nothing was verified and nothing was learned.
+    assert result.execution is None
+    assert result.verification is None
+    assert result.belief is None
+
+
+def test_the_first_domain_is_untouched_by_the_second_one_arriving(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The regression that matters most: the multi-node graph costs item 9 nothing."""
+    result = run(a_clean_run())
+    root = next(s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_INCIDENT)
+    assert root.attributes is not None
+    assert root.attributes["provenance.incident.routed_to"] == "sre-infra-agent"
+    assert result.outcome == "RESOLVED"
+    assert result.action is not None
+    assert (result.action.action_class, result.action.target) == (
+        "ROLLBACK_CONFIG",
+        "inventory-api",
+    )
+    assert result.decision is not None and result.decision.score is not None
+    assert result.decision.score.score == 2
+    assert result.belief is not None and result.belief.confidence == pytest.approx(0.60)
+
+
+def _unrouted(domain: str, trigger: incident.Trigger) -> tuple[incident.IncidentResult, FakeLlm]:
+    """One incident whose replies stop after the classification, so a routed run would raise."""
+    model = FakeLlm(model="fake-model", replies=[a_classification(domain)], prompts=[])
+    result = asyncio.run(
+        incident.run_incident(
+            trigger,
+            client=a_store(),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+    return result, model
+
+
+def test_a_domain_that_does_not_act_on_the_targets_kind_is_unroutable() -> None:
+    """Item 21's fail-closed routing check (§7.3), and the reason merged seeding is safe.
+
+    `infrastructure` is a registered domain, so without the kind check this incident routes and
+    the SRE agent diagnoses a supplier off the `"n/a"` placeholders its seeder returns. That the
+    outcome is `UNROUTABLE` at all is therefore the check firing, and the unconsumed reply queue
+    is what says no domain agent was ever asked.
+    """
+    result, model = _unrouted("infrastructure", a_supplier_trigger())
+
+    assert result.outcome == "UNROUTABLE"
+    assert result.action is None and result.decision is None
+    assert len(model.prompts) == 1, "a domain agent was asked to diagnose a supplier"
+
+
+def test_an_unknown_domain_is_still_unroutable_for_its_own_reason() -> None:
+    """The kind check is an addition, not a replacement: a domain nobody owns still ends here."""
+    result, model = _unrouted("astrology", a_supplier_trigger())
+    assert result.outcome == "UNROUTABLE"
+    assert len(model.prompts) == 1
+
+
+def test_every_domain_seeder_runs_on_every_incident_and_they_do_not_collide() -> None:
+    """State is seeded before classification, so every seeder runs and each owns its keys.
+
+    `planner_context` is the deliberate exception -- both can produce it, and each returns it
+    only for a target of its own kind, so exactly one fills it per incident. Without that,
+    whichever domain came last in `DOMAINS` would blank the routed one's block.
+    """
+    claimed: dict[str, set[str]] = {}
+    for name, entry in incident.DOMAINS.items():
+        for trigger in (a_trigger(), a_supplier_trigger()):
+            claimed.setdefault(name, set()).update(entry.seed(trigger))
+
+    private = {name: keys - {"planner_context"} for name, keys in claimed.items()}
+    for name, keys in private.items():
+        others = set().union(*(v for k, v in private.items() if k != name))
+        assert not (keys & others), f"{name} shares {keys & others}"
+
+    for trigger, expect_domain in (
+        (a_trigger(), "infrastructure"),
+        (a_supplier_trigger(), "supply-chain"),
+    ):
+        filled = [
+            name
+            for name, entry in incident.DOMAINS.items()
+            if entry.seed(trigger).get("planner_context")
+        ]
+        assert filled == [expect_domain], (trigger.target, filled)
+
+
+def test_the_planner_is_told_the_routed_domains_facts_and_not_the_other_domains() -> None:
+    """The `{planner_context}` slot, checked on the prompt the model was actually handed."""
+    model = FakeLlm(model="fake-model", replies=list(a_clean_run()), prompts=[])
+    asyncio.run(
+        incident.run_incident(
+            a_trigger(),
+            client=a_store(),
+            planner_key=PLANNER_KEY,
+            model_orchestrator=model,
+            model_domain=model,
+            model_planner=model,
+            model_verification=model,
+        )
+    )
+    planning_prompt = model.prompts[2]
+    assert "last known-good config version: v41" in planning_prompt
+    assert "nominal (healthy) error rate: 0.01 (1%)" in planning_prompt
+    # Item 11.5's floor and item 20's literal-values clause moved with the block, unchanged.
+    assert "strictly above 0.01" in planning_prompt
+    assert 'write "is v41"' in planning_prompt
+    # And nothing of the other domain leaked into it.
+    assert "contract of record" not in planning_prompt

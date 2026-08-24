@@ -131,10 +131,16 @@ async def belief(entity: str) -> dict[str, Any]:
         "current": {
             "version": in_force.version,
             "as_of": now.strftime(beliefs.TIMESTAMP),
-            "confidence_now": policy.confidence([by_id[i] for i in in_force.evidence_ids], now=now),
+            # The half-life comes off the version's own `domain` (item 21), so the number this
+            # route recomputes is decayed by the same clock the Policy Engine committed it with.
+            "confidence_now": policy.confidence(
+                [by_id[i] for i in in_force.evidence_ids], domain=in_force.domain, now=now
+            ),
             "breakdown": [
                 asdict(row)
-                for row in policy.contributions([by_id[i] for i in in_force.evidence_ids], now=now)
+                for row in policy.contributions(
+                    [by_id[i] for i in in_force.evidence_ids], domain=in_force.domain, now=now
+                )
             ],
         },
     }

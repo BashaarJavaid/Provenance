@@ -21,6 +21,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from conftest import attach_exporter
@@ -160,7 +161,7 @@ def window(store: FakeFirestore) -> list[dict[str, Any]]:
 
 def test_one_fresh_verified_observation_gives_exactly_the_published_weight() -> None:
     """`1 - (1 - 0.60) = 0.60`. The number in §4.3's table, with no decay applied yet."""
-    assert policy.confidence([an_evidence()], now=NOW) == pytest.approx(0.60)
+    assert policy.confidence([an_evidence()], domain=DOMAIN, now=NOW) == pytest.approx(0.60)
 
 
 def test_restating_one_observation_twice_is_worth_exactly_stating_it_once() -> None:
@@ -171,21 +172,21 @@ def test_restating_one_observation_twice_is_worth_exactly_stating_it_once() -> N
     by a single reading of a single dial.
     """
     restated = [an_evidence(), an_evidence(id="ev-2")]
-    assert policy.confidence(restated, now=NOW) == pytest.approx(0.60)
+    assert policy.confidence(restated, domain=DOMAIN, now=NOW) == pytest.approx(0.60)
 
 
 def test_a_bare_assertion_cannot_move_confidence_at_all() -> None:
     """`unverified_external_claim` weighs 0.00, so it is not weak evidence — it is none."""
     claim = an_evidence(id="ev-x", source_class="unverified_external_claim")
-    assert policy.confidence([claim], now=NOW) == pytest.approx(0.0)
+    assert policy.confidence([claim], domain=DOMAIN, now=NOW) == pytest.approx(0.0)
     # And it cannot dilute a real one either.
-    assert policy.confidence([an_evidence(), claim], now=NOW) == pytest.approx(0.60)
+    assert policy.confidence([an_evidence(), claim], domain=DOMAIN, now=NOW) == pytest.approx(0.60)
 
 
 def test_an_aged_observation_weighs_less_than_a_fresh_one() -> None:
     """§6.5: "beliefs weaken on their own". One half-life halves the weight."""
     old = an_evidence(observed_at=(NOW - timedelta(days=30)).strftime(policy.TIMESTAMP))
-    assert policy.confidence([old], now=NOW) == pytest.approx(0.30)
+    assert policy.confidence([old], domain=DOMAIN, now=NOW) == pytest.approx(0.30)
 
 
 def test_age_decay_is_monotonic() -> None:
@@ -197,11 +198,51 @@ def test_age_decay_is_monotonic() -> None:
     sign error inside the exponent passes any single-point test that fits it.
     """
     ages = [0, 1, 7, 30, 31, 90, 365, 3650]
-    values = [policy.confidence([an_evidence()], now=NOW + timedelta(days=days)) for days in ages]
+    values = [
+        policy.confidence([an_evidence()], domain=DOMAIN, now=NOW + timedelta(days=days))
+        for days in ages
+    ]
     assert all(a >= b for a, b in pairwise(values)), values
     assert values[0] == pytest.approx(0.60)
     assert values[ages.index(30)] == pytest.approx(0.30), "one half-life halves the weight"
     assert values[-1] < 0.001, "a decade on, the observation is worth all but nothing"
+
+
+# --- §4.3's half-life, per domain (item 21) ------------------------------------------------
+
+
+def test_every_domain_an_agent_may_write_in_has_a_published_half_life() -> None:
+    """A belief must never silently borrow another domain's decay clock.
+
+    The same guard `tests/test_risk.py` puts on `risk.BASE` against `tools.TOOLS`: a third
+    domain cannot ship without a half-life, because the registry record that authorises it to
+    write beliefs is what this reads. Making the lookup a `KeyError` rather than a default is
+    only fail-closed if something checks the keys are all there.
+    """
+    held = {d for agent in registry.AGENTS for d in agent.memory_domains}
+    assert held, "the registry fixture holds no memory domains at all"
+    assert held <= set(policy.HALF_LIFE_DAYS), held - set(policy.HALF_LIFE_DAYS)
+
+
+def test_an_unpublished_domain_raises_rather_than_defaulting() -> None:
+    with pytest.raises(KeyError):
+        policy.contributions([an_evidence()], domain="astrology", now=NOW)
+
+
+def test_the_half_life_is_read_per_domain_and_not_from_one_constant() -> None:
+    """Item 21's plumbing, checked by moving one domain's clock and not the other's.
+
+    Both published values are 30 days today, so nothing observable distinguishes a real
+    lookup from the old constant. Patching one entry is what does: if `contributions()` had
+    kept reading a single number, the supply-chain row would decay identically.
+    """
+    aged = an_evidence(observed_at=(NOW - timedelta(days=30)).strftime(policy.TIMESTAMP))
+    infra = policy.contributions([aged], domain=DOMAIN, now=NOW)[0]
+    with patch.dict(policy.HALF_LIFE_DAYS, {"supply-chain": 60.0}):
+        supply = policy.contributions([aged], domain="supply-chain", now=NOW)[0]
+    assert infra.weight == pytest.approx(0.30)
+    assert supply.weight == pytest.approx(0.60 * 2 ** (-0.5))
+    assert supply.weight > infra.weight
 
 
 # --- §4.3's arithmetic, published (item 17) ------------------------------------------------
@@ -226,9 +267,9 @@ def test_the_contributions_are_exactly_what_confidence_multiplies() -> None:
         [an_evidence(id="ev-x", source_class="unverified_external_claim")],
     ):
         product = 1.0
-        for row in policy.contributions(evidence, now=NOW):
+        for row in policy.contributions(evidence, domain=DOMAIN, now=NOW):
             product *= 1 - row.weight
-        assert 1 - product == pytest.approx(policy.confidence(evidence, now=NOW))
+        assert 1 - product == pytest.approx(policy.confidence(evidence, domain=DOMAIN, now=NOW))
 
 
 def test_a_restatement_collapses_to_one_row_and_it_is_the_freshest() -> None:
@@ -245,7 +286,7 @@ def test_a_restatement_collapses_to_one_row_and_it_is_the_freshest() -> None:
     # agree on any single ordering and disagree on the pair. Evidence arrives in whatever
     # order a caller assembled it, so only the pair pins the rule.
     for evidence in ([older, an_evidence()], [an_evidence(), older]):
-        rows = policy.contributions(evidence, now=NOW)
+        rows = policy.contributions(evidence, domain=DOMAIN, now=NOW)
         assert len(rows) == 1
         assert rows[0].source_class == "verified_system_observation"
         assert rows[0].base == pytest.approx(0.60)
@@ -260,11 +301,16 @@ def test_every_row_carries_the_published_base_weight_and_its_own_decay() -> None
         source_class="third_party_audit",
         observed_at=(NOW - timedelta(days=15)).strftime(policy.TIMESTAMP),
     )
-    rows = {row.source_class: row for row in policy.contributions([an_evidence(), aged], now=NOW)}
+    rows = {
+        row.source_class: row
+        for row in policy.contributions([an_evidence(), aged], domain=DOMAIN, now=NOW)
+    }
     assert rows.keys() == {"verified_system_observation", "third_party_audit"}
     for source_class, row in rows.items():
         assert row.base == pytest.approx(policy.BASE_WEIGHT[source_class])
-        assert row.weight == pytest.approx(row.base * 2 ** (-row.age_days / policy.HALF_LIFE_DAYS))
+        assert row.weight == pytest.approx(
+            row.base * 2 ** (-row.age_days / policy.HALF_LIFE_DAYS[DOMAIN])
+        )
     assert rows["third_party_audit"].age_days == pytest.approx(15.0)
 
 
@@ -279,15 +325,21 @@ def test_the_seeded_sup_042_chain_is_the_arithmetic_item_17_publishes() -> None:
     inference = an_evidence(id="ev-i", source_class="agent_inference")
     audit_item = an_evidence(id="ev-a", source_class="third_party_audit")
     # v1, committed eight days before v2: both of its items are fresh at its own commit.
-    assert policy.confidence([contract, inference], now=NOW) == pytest.approx(0.575)
-    assert policy.confidence([contract, inference], now=NOW) >= policy.NEW_BELIEF_THRESHOLD
+    assert policy.confidence([contract, inference], domain=DOMAIN, now=NOW) == pytest.approx(0.575)
+    assert (
+        policy.confidence([contract, inference], domain=DOMAIN, now=NOW)
+        >= policy.NEW_BELIEF_THRESHOLD
+    )
     # v2, over the accumulated set: v1's two items have decayed eight days, the audit is fresh.
     later = NOW + timedelta(days=8)
     fresh_audit = replace(audit_item, observed_at=later.strftime(policy.TIMESTAMP))
-    assert policy.confidence([contract, inference, fresh_audit], now=later) == pytest.approx(
-        0.7698, abs=0.0005
+    assert policy.confidence(
+        [contract, inference, fresh_audit], domain=DOMAIN, now=later
+    ) == pytest.approx(0.7698, abs=0.0005)
+    assert (
+        policy.confidence([contract, inference, fresh_audit], domain=DOMAIN, now=later)
+        >= policy.FLIP_THRESHOLD
     )
-    assert policy.confidence([contract, inference, fresh_audit], now=later) >= policy.FLIP_THRESHOLD
 
 
 # --- §2.2, the pipeline ----------------------------------------------------------------------
@@ -457,7 +509,7 @@ def test_a_flip_below_both_doors_is_the_poisoning_case_and_still_costs_standing(
     )
 
     assert (flip.outcome, flip.reason) == ("REJECT", "BELOW_THRESHOLD")
-    assert flip.confidence == pytest.approx(0.60 * 2 ** (-15 / policy.HALF_LIFE_DAYS))
+    assert flip.confidence == pytest.approx(0.60 * 2 ** (-15 / policy.HALF_LIFE_DAYS[DOMAIN]))
     assert flip.confidence < policy.NEW_BELIEF_THRESHOLD
     assert "2" not in store.collections[VERSIONS]
     assert [entry["reason"] for entry in window(store)] == ["BELOW_THRESHOLD"]

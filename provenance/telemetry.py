@@ -67,7 +67,12 @@ SourceClass = Literal[
     "unverified_external_claim",
 ]
 VerificationOutcome = Literal["CONFIRMED", "REFUTED", "INCONCLUSIVE"]
-TriggerSignal = Literal["error_rate"]
+# One value per kind of deviation the fleet can be woken by. `compliance_lapse` is item 21's
+# and is the second domain's: a supplier whose certification has lapsed is not an error rate,
+# and reporting it as one would put an untrue fact on the incident span. Widening this to a
+# plain `str` was the alternative and loses the out-of-vocabulary check below, which is the
+# property the Literal exists for.
+TriggerSignal = Literal["error_rate", "compliance_lapse"]
 IncidentOutcome = Literal[
     "RESOLVED",  # item 10: executed, verified CONFIRMED, belief attempted. Not an error.
     "AUTHORIZED",

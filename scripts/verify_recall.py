@@ -59,6 +59,7 @@ ALL_BELIEFS = (ENTITY_BELIEF, CLOSEST, CURRENT, DISTANT)
 QUERY = recall.query_text(
     target=ENTITY,
     signal="error_rate_spike",
+    kind="service",
     tier="tier2",
     description="inventory availability and reservation API",
     observed_value=0.38,
