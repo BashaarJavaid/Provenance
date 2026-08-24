@@ -17,14 +17,19 @@ Two invariants here are load-bearing for numbers frozen elsewhere and are assert
     commits as a belief (§2.2) — `SUP-042`'s AT_RISK belief is item 17's job, not a field
     a seed script gets to assert.
 
-`scripts/seed_firestore.py` writes all of this to Firestore. This module holds no cloud
-imports so the invariants can be checked in CI with no credentials.
+`scripts/seed_firestore.py` writes all of this to Firestore. This module reaches no cloud
+service and holds no client, so the invariants can be checked in CI with no credentials.
+Its one intra-package import is `telemetry.TargetKind` (item 21) -- the vocabulary
+`tools.Tool.target_kind` already selects an entity collection with, shared rather than
+restated so the two cannot drift.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+
+from provenance.telemetry import TargetKind
 
 COMPANY_NAME = "Cymbal Home & Garden"
 
@@ -350,6 +355,10 @@ ORDERS: tuple[Order, ...] = (
 # the collections typed precisely so the caller always knows which kind it holds, and item 6's
 # tool schema names that kind (`tools.Tool.target_kind`), so a polymorphic lookup would have
 # nothing to resolve. Both raise `KeyError`; nothing here returns an optional.
+#
+# Item 21 found the one caller that genuinely does not know the kind, and `described()` below
+# is for it alone -- see its docstring. It does not weaken the rule above: every *authorization*
+# path still resolves the kind from the tool registry first and then reads the typed collection.
 
 _SERVICES_BY_ID = {service.id: service for service in SERVICES}
 _SUPPLIERS_BY_ID = {supplier.id: supplier for supplier in SUPPLIERS}
@@ -363,3 +372,36 @@ def service(service_id: str) -> Service:
 def supplier(supplier_id: str) -> Supplier:
     """The supplier with this id. Raises `KeyError` if the entity model has no such supplier."""
     return _SUPPLIERS_BY_ID[supplier_id]
+
+
+@dataclass(frozen=True)
+class Described:
+    """The three facts a caller can want about an entity before it knows what kind it is."""
+
+    kind: TargetKind
+    tier: Tier
+    description: str
+
+
+def described(entity_id: str) -> Described:
+    """Kind, tier and description for an entity of either kind. Raises `KeyError` if unknown.
+
+    The one polymorphic read in this module, and it exists because item 21 found the one place
+    the kind is genuinely not yet known: `incident.run_incident()` builds the recall query and
+    `route` checks the classified domain *before* anything has resolved a tool. Every other
+    caller reaches an entity through `tools.Tool.target_kind`, which is why `service()` and
+    `supplier()` stay separate and are still what `action.validate()` uses.
+
+    A supplier's description is composed rather than stored: §9's `Supplier` carries `name`,
+    `category` and `contract_ref`, and adding a `description` field to the frozen fixture to
+    serve one prompt slot would be a field the seeder writes and nothing checks.
+    """
+    found = _SERVICES_BY_ID.get(entity_id)
+    if found is not None:
+        return Described(kind="service", tier=found.tier, description=found.description)
+    held = _SUPPLIERS_BY_ID[entity_id]
+    return Described(
+        kind="supplier",
+        tier=held.tier,
+        description=f"{held.name}, a {held.category} supplier (contract {held.contract_ref})",
+    )

@@ -3,16 +3,18 @@
 The live half is `scripts/seed_firestore.py`, which writes the fixture to Firestore and
 reads every document back. These tests guard the properties that later items' frozen
 numbers and demo beats depend on, so breaking one fails the build here rather than in
-Phase 3. Nothing in this file imports a cloud library.
+Phase 3. Nothing in this file reaches a cloud service.
 """
 
 from __future__ import annotations
 
 from dataclasses import fields
+from typing import get_args
 
 import pytest
 
 from provenance.synthetic import company
+from provenance.telemetry import TargetKind
 
 TIERS = {"tier1", "tier2", "tier3"}
 
@@ -119,3 +121,31 @@ def test_the_entity_lookups_resolve_and_raise_on_a_miss() -> None:
     # `target_kind` load-bearing rather than decorative.
     with pytest.raises(KeyError):
         company.service("SUP-042")
+
+
+def test_described_resolves_either_kind_and_raises_on_a_miss() -> None:
+    """Item 21's one polymorphic read, for the callers that run before a kind is known."""
+    for service in company.SERVICES:
+        found = company.described(service.id)
+        assert (found.kind, found.tier, found.description) == (
+            "service",
+            service.tier,
+            service.description,
+        )
+    for supplier in company.SUPPLIERS:
+        found = company.described(supplier.id)
+        assert found.kind == "supplier"
+        assert found.tier == supplier.tier
+        # Composed from the fields §9 already gives a supplier, never a stored `description`:
+        # a field the seeder writes and nothing checks is a field that drifts.
+        assert supplier.name in found.description
+        assert supplier.category in found.description
+        assert supplier.contract_ref in found.description
+    with pytest.raises(KeyError):
+        company.described("billing-api")
+
+
+def test_described_agrees_with_the_tool_registry_vocabulary() -> None:
+    """The kind it returns is the one `tools.Tool.target_kind` selects a collection with."""
+    kinds = {company.described(e.id).kind for e in (*company.SERVICES, *company.SUPPLIERS)}
+    assert kinds == set(get_args(TargetKind))

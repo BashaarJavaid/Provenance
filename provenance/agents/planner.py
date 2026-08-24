@@ -23,6 +23,14 @@ agent: `{malformed_feedback}` is §7.1's schema rejection (item 9) and `{refutat
 §7.2's refuted remediation (item 20). They stay separate because they say different things -- one
 is "that was not a valid action", the other is "that action ran and did not work" -- and a Planner
 that cannot tell them apart cannot respond to either.
+
+A third slot, `{planner_context}`, is item 21's and is filled by the **routed domain**, not by the
+control loop. Everything above it is true of any incident; everything in it is what one domain
+knows -- its entity's observable state and what a success predicate over that state has to
+satisfy. Until a second domain existed this file named config versions and an error rate directly,
+which would have had the Planner assert service facts about a supplier. Item 11.5's predicate
+floor and item 20's ceiling moved into `agents/sre_infra.py` unchanged in wording: both were found
+live, and both are facts about infrastructure rather than about planning.
 """
 
 from __future__ import annotations
@@ -78,11 +86,7 @@ def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent
         instruction=(
             "You are the Remediation Planner of an incident-response fleet.\n"
             "A domain agent has diagnosed an incident:\n"
-            "  service: {trigger_target} (tier {target_tier})\n"
-            "  currently deployed config version: {current_config_version}\n"
-            "  last known-good config version: {known_good_version}\n"
-            "  nominal (healthy) error rate: {nominal_error_rate} "
-            "({nominal_error_rate_pct}%)\n"
+            "  target: {trigger_target} (tier {target_tier})\n"
             "  diagnosis: {diagnosis_summary}\n\n"
             "Emit exactly one action that addresses the diagnosed cause.\n"
             "  - action_class must be one of: {known_action_classes}\n"
@@ -93,19 +97,12 @@ def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent
             "  - evidence_refs must be the diagnosis's own evidence ids\n"
             "  - proposed_by must be exactly: {planner_identity}\n"
             "  - success_predicate is declared now and checked after execution. Name the "
-            "metric, the threshold and the window. It must be checkable against the target "
-            "service's observable state -- its error rate and its deployed config version -- "
-            "and must state a concrete numeric threshold, because a verification agent will "
-            "be shown only those measurements and your sentence. The threshold you name must "
-            "be strictly above the nominal error rate given above: a remediation that fully "
-            "succeeds returns the service to exactly that value, so a threshold at it is "
-            "unsatisfiable no matter how well the remediation worked. State every value "
-            "literally rather than by reference -- the verification agent is shown the "
-            "deployed config version but not what 'known-good' refers to, so write \"is "
-            '{known_good_version}" and never "matches the last known-good version".\n\n'
-            "Outside the success predicate, do not carry a version number in any field: the "
-            "executor reads the known-good version from the entity model, so a version in "
-            "your sentence is something to be checked and never something to be obeyed.\n"
+            "metric, the threshold and the window, state every value literally rather than "
+            "by reference, and give a concrete number: a verification agent will be shown "
+            "only measurements of the target's observable state and your sentence, so a "
+            "predicate it cannot evaluate against those is one it must answer "
+            "INCONCLUSIVE to.\n\n"
+            "{planner_context}\n"
             "{malformed_feedback}"
             "{refutation_feedback}"
         ),

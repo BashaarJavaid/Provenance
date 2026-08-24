@@ -102,10 +102,24 @@ BASE_WEIGHT: dict[SourceClass, float] = {
     "unverified_external_claim": 0.00,
 }
 
-# §6.5's decay clock, as one number, and published in §4.3 beside the weights it multiplies.
-# §4.3 writes it "half_life_domain"; item 21 is what makes it per-domain, because that is when
-# a second domain first writes beliefs. A dict keyed by one key varies by nothing.
-HALF_LIFE_DAYS = 30.0
+# §6.5's decay clock, published in §4.3 beside the weights it multiplies. §4.3 writes it
+# `half_life_domain`, and item 21 is what makes it per-domain -- the item at which a second
+# domain first has beliefs of its own to decay. It is a lookup and not a default: a belief in
+# a domain with no published half-life must not silently borrow another domain's, so an
+# unknown key raises `KeyError`, the same posture `risk.BASE` and `tools.tool_for()` take.
+# `tests/test_policy.py` pins the key set against the domains that exist, so a third domain
+# cannot ship without one.
+#
+# Both values are 30 days today, and that is the honest state rather than a placeholder. A
+# longer supply-chain half-life is arguable -- a contractual record ages more slowly than a
+# live service observation -- but nothing in this project has measured it, and ADR-002's whole
+# defence of these numbers is that they are inspectable and fixed rather than tuned. What item
+# 21 buys is that the number is now looked up per domain at every place it is used, so a
+# future value is one line here and nothing else.
+HALF_LIFE_DAYS: dict[str, float] = {
+    "infrastructure": 30.0,
+    "supply-chain": 30.0,
+}
 
 # §6.5's two expiry behaviours. The Sweeper (Phase 9) is what consumes this; item 12 writes
 # it so that beliefs committed before the Sweeper exists still carry a decay clock.
@@ -273,8 +287,13 @@ class Contribution:
     weight: float
 
 
-def contributions(evidence: Sequence[Evidence], *, now: datetime) -> tuple[Contribution, ...]:
-    """§4.3's per-class weights: `w = base_weight × 2^(-age / half_life)`.
+def contributions(
+    evidence: Sequence[Evidence], *, domain: str, now: datetime
+) -> tuple[Contribution, ...]:
+    """§4.3's per-class weights: `w = base_weight × 2^(-age / half_life_domain)`.
+
+    `domain` selects the half-life (item 21) and is required rather than defaulted, because a
+    belief whose domain has no published half-life is a belief nothing can honestly decay.
 
     One row per **distinct source class**, not one per item — the strongest (least decayed)
     item of each class is the one that counts, which is what makes corroboration mean
@@ -282,6 +301,7 @@ def contributions(evidence: Sequence[Evidence], *, now: datetime) -> tuple[Contr
     cannot talk a belief over the threshold. Ordered by descending weight, because that is
     the order the arithmetic reads in.
     """
+    half_life = HALF_LIFE_DAYS[domain]
     strongest: dict[SourceClass, Contribution] = {}
     for item in evidence:
         age_days = max(0.0, (now - _parse(item.observed_at)).total_seconds() / 86400)
@@ -290,7 +310,7 @@ def contributions(evidence: Sequence[Evidence], *, now: datetime) -> tuple[Contr
             source_class=item.source_class,
             base=base,
             age_days=age_days,
-            weight=base * 2 ** (-age_days / HALF_LIFE_DAYS),
+            weight=base * 2 ** (-age_days / half_life),
         )
         held = strongest.get(item.source_class)
         if held is None or row.weight > held.weight:
@@ -298,10 +318,10 @@ def contributions(evidence: Sequence[Evidence], *, now: datetime) -> tuple[Contr
     return tuple(sorted(strongest.values(), key=lambda c: -c.weight))
 
 
-def confidence(evidence: Sequence[Evidence], *, now: datetime) -> float:
+def confidence(evidence: Sequence[Evidence], *, domain: str, now: datetime) -> float:
     """§4.3's noisy-OR: `1 − Π(1 − w_i)` over the **distinct source classes** present."""
     product = 1.0
-    for row in contributions(evidence, now=now):
+    for row in contributions(evidence, domain=domain, now=now):
         product *= 1 - row.weight
     return 1 - product
 
@@ -554,7 +574,7 @@ async def _decide(
     # A retraction is measured over the **disproving items alone**, and that is what makes its
     # door a door: over the accumulated set any threshold is free, since that set has already
     # cleared one. What §6.4 asks is how strong the case *against* the belief is.
-    conf = confidence(new if retracting else (*known, *new), now=now)
+    conf = confidence(new if retracting else (*known, *new), domain=domain, now=now)
 
     # Stage 5 — §4.3's thresholds and the conflict rule for whichever door this is. Which one
     # a proposal faces is decided by facts, not judgment: a retraction faces §6.4, a claimed
@@ -634,8 +654,10 @@ async def _decide(
         committed_by="memory-policy-engine",
         signature=_sign(belief_id, version, outcome, "ABOVE_THRESHOLD", conf).signature,
         supersedes=supersedes,
-        half_life_days=HALF_LIFE_DAYS,
-        expires_at=(now + timedelta(days=HALF_LIFE_DAYS)).astimezone(UTC).strftime(TIMESTAMP),
+        half_life_days=HALF_LIFE_DAYS[domain],
+        expires_at=(now + timedelta(days=HALF_LIFE_DAYS[domain]))
+        .astimezone(UTC)
+        .strftime(TIMESTAMP),
         on_expiry=ON_EXPIRY,
     )
     try:

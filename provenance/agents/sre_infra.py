@@ -14,10 +14,12 @@ that both diagnoses and proposes is an agent that can talk itself into an action
 
 from __future__ import annotations
 
+from typing import Any
+
 from google.adk.agents import LlmAgent
-from pydantic import BaseModel, Field
 
 from provenance.agents import _reasoning
+from provenance.synthetic import company
 
 OUTPUT_KEY = "diagnosis"
 STEP = "diagnosis"
@@ -32,22 +34,64 @@ DOMAIN_SCOPE = (
 )
 
 
-class Diagnosis(BaseModel):
-    """What the domain agent hands the Planner. Not an action, and not authority."""
+def seed_state(trigger: Any, *, deployed_version: str | None = None) -> dict[str, Any]:
+    """Every session-state key this domain's prompts name, plus the Planner's context block.
 
-    summary: str = Field(description="What is wrong, in one or two sentences.")
-    evidence_refs: list[str] = Field(
-        description="Short stable ids for the observations this rests on, e.g. obs-error-rate."
-    )
-    recommended_action_class: str = Field(
-        description="The action class that would address the cause, or NONE if unsure."
-    )
-    hypotheses_considered: int = Field(
-        description="How many distinct causes were genuinely weighed."
-    )
-    selected_hypothesis: str = Field(
-        description="A short snake_case label for the chosen cause, e.g. config_regression."
-    )
+    Called for **every** incident, not only the ones routed here: state is seeded before the
+    Orchestrator classifies, so a seeder cannot be picked by domain, and an instruction naming
+    a key that was never seeded fails at interpolation time. A target that is not a service
+    therefore gets these keys as "n/a" rather than not at all. `route` refuses to hand a
+    supplier to this agent (item 21), so the placeholders are never what a diagnosis is built
+    on -- they exist so a mis-classification ends `UNROUTABLE` instead of raising.
+
+    `planner_context` is the one key both domains' seeders can produce, and each returns it only
+    for a target of its own kind, so exactly one of them fills it for any given incident.
+
+    `deployed_version` is item 20's re-plan: the rollback has moved the version since wake
+    time, and re-planning against a version the system no longer has is a re-plan aimed at the
+    wrong world. `resolve` passes the measured post-state and the block is rebuilt.
+    """
+    try:
+        service = company.service(trigger.target)
+    except KeyError:
+        return {
+            "current_config_version": "n/a",
+            "known_good_version": "n/a",
+            "nominal_error_rate": 0.0,
+            "nominal_error_rate_pct": "n/a",
+        }
+    current = deployed_version or service.current_config_version or "unknown"
+    known_good = service.known_good_version or "unknown"
+    # Item 11.5. What healthy looks like, from the frozen fixture and never from the trigger:
+    # `executor.execute()` writes this exact value back on a successful rollback, so a Planner
+    # told the *spiked* rate would declare a threshold no success can satisfy. Both units
+    # because the defect was a units collision -- the model translated 0.01 into "less than 1%"
+    # and could not see it had landed on the baseline.
+    nominal = service.error_rate
+    return {
+        "current_config_version": current,
+        "known_good_version": known_good,
+        "nominal_error_rate": nominal,
+        "nominal_error_rate_pct": f"{nominal * 100:g}",
+        "planner_context": (
+            f"What is known about {service.id}, and what your success predicate must satisfy:\n"
+            f"  currently deployed config version: {current}\n"
+            f"  last known-good config version: {known_good}\n"
+            f"  nominal (healthy) error rate: {nominal} ({nominal * 100:g}%)\n"
+            "The predicate must be checkable against this service's error rate and its "
+            "deployed config version, and nothing else, because those are the only "
+            "measurements the verification agent is shown. The threshold you name must be "
+            f"strictly above {nominal}: a remediation that fully succeeds returns the service "
+            "to exactly that value, so a threshold at it is unsatisfiable no matter how well "
+            "the remediation worked. State every value literally rather than by reference -- "
+            "the verification agent is shown the deployed config version but not what "
+            f'"known-good" refers to, so write "is {known_good}" and never "matches the last '
+            'known-good version".\n'
+            "Outside the success predicate, do not carry a version number in any field: the "
+            "executor reads the known-good version from the entity model, so a version in your "
+            "sentence is something to be checked and never something to be obeyed.\n"
+        ),
+    }
 
 
 def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent:
@@ -74,7 +118,7 @@ def build(model: str | object, *, agent_id: str, agent_version: str) -> LlmAgent
             "Recommend NONE if the evidence does not support any of them.\n"
             "Do not propose an action; another agent does that. Diagnose only."
         ),
-        output_schema=Diagnosis,
+        output_schema=_reasoning.Diagnosis,
         output_key=OUTPUT_KEY,
     )
     _reasoning.attach(
