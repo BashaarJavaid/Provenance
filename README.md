@@ -18,6 +18,8 @@ Most "agentic enterprise" systems are single-domain and stateless: one agent, on
 2. **No governance on autonomous action.** An agent that can diagnose a problem can usually also make it worse. Every state-mutating action must be gated by identity, policy, and evidence, deterministically, every time.
 3. **No generalized loop.** Most fleets are built for exactly one kind of incident. An enterprise nervous system has to run the *same* control loop across domains, not a bespoke pipeline per problem type.
 
+   *Measured, not asserted:* the second domain (Supply-Chain) cost **114 lines in one agent file and zero in a registry entry**, with no change to any decision path in the gateway, the risk table or the Memory Policy Engine — at the price of **207 behavioural lines** spent making a single-domain loop multi-domain, every one of them itemized in [`docs/generality-report.md`](./docs/generality-report.md) rather than rounded away.
+
 ## The core abstraction
 
 Two nested loops, applied uniformly regardless of domain:
@@ -246,6 +248,7 @@ non-zero if any is missing or does not match the fixture.
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the full design: both decision pipelines, canonical typed objects, the determinism boundary, memory design, failure modes, observability, testing strategy, deployment.
 - [`THREAT_MODEL.md`](./THREAT_MODEL.md) — what's protected against, what isn't, and the assumptions the design rests on.
 - [`docs/adr/`](./docs/adr/) — one file per architecture decision, including why common alternatives weren't chosen.
+- [`docs/generality-report.md`](./docs/generality-report.md) — spec §18's generality claim as a number: what the second domain actually cost, itemized, with the prediction a third domain has to beat.
 - [`ROADMAP.md`](./ROADMAP.md) — the build order as a living checklist.
 - [`self-healing-enterprise-project-spec (1).md`](<./self-healing-enterprise-project-spec (1).md>) — the original project spec this documentation suite was derived from; includes the demo script (§13) and submission logistics (§21).
 
