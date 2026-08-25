@@ -1495,3 +1495,100 @@ def test_the_planner_is_told_the_routed_domains_facts_and_not_the_other_domains(
     assert 'write "is v41"' in planning_prompt
     # And nothing of the other domain leaked into it.
     assert "contract of record" not in planning_prompt
+
+
+# --- incident #3: the fleet generalizes (item 24) -----------------------------------------
+
+
+def a_cold_store(**kwargs: Any) -> FakeFirestore:
+    """`a_store()` plus `pricing-api`, the service with no config history and no beliefs.
+
+    Added beside the fixture rather than parameterising `a_store()`, which forty other tests
+    call: the two tests below are the only ones that need a second service, and `pricing-api`
+    is deliberately the one entity the fleet has never handled (§12, ADR-025).
+    """
+    store = a_store(**kwargs)
+    service = company.service("pricing-api")
+    store.collections["services"]["pricing-api"] = {
+        **asdict(service),
+        "error_rate": 0.38,
+        "healthy": False,
+    }
+    store.collections["fault_injection"]["pricing-api"] = {
+        "error_rate_spike": True,
+        "rollback_fails": False,
+        "verification_ambiguous": False,
+    }
+    return store
+
+
+def test_an_incident_on_a_target_with_no_known_good_version_escalates() -> None:
+    """Item 24's terminal shape, and it is the design rather than a shortfall.
+
+    `pricing-api` has `known_good_version=None` on purpose, so `executor.execute()` refuses
+    (§7.3) and the execute node routes HALT. The fleet generalized, proposed the right class
+    of remediation, and the executor declined an action the entity cannot receive. Nothing
+    ran, so §7.2 permits nothing to be learned — which is what keeps that service belief-free
+    for every later run of this beat. `tests/test_executor.py` covers the raise; this is what
+    the loop does with it.
+    """
+    store = a_cold_store()
+    replies = [a_classification(), a_diagnosis(), a_proposal(target="pricing-api")]
+
+    result = run(replies, store=store, trigger=a_trigger(target="pricing-api"))
+
+    assert result.outcome == "ESCALATED"
+    # The proposal was authorized — the halt is the executor's, downstream of a real APPROVE.
+    assert result.decision is not None
+    assert result.decision.outcome == "APPROVE"
+    assert result.decision.score is not None and result.decision.score.score == 2
+    assert result.execution is None
+    assert result.verification is None
+    assert result.belief is None
+    assert store.collections["beliefs"] == {}
+    # And the world is untouched: a refused rollback deploys nothing.
+    assert store.collections["services"]["pricing-api"]["error_rate"] == 0.38
+
+
+def test_a_class_belief_reaches_a_cold_target_and_the_ledger_still_cites_nothing(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§6.2's advisory cap on an entity with *no* entity belief at all — item 24's premise.
+
+    The warm version of this is already covered: with an entity belief present, `belief_ids`
+    holding exactly that one shows the class belief was excluded. Cold, the whole field is
+    empty, so "the class belief was not cited" and "recall returned nothing" would pass the
+    same check — hence the span assertion beside it, which is what says the generalization
+    genuinely reached the reasoning agents.
+    """
+    store = a_cold_store()
+    a_prior_belief(
+        store,
+        a_prior_version(
+            1,
+            belief_id="belief-service.tier2",
+            scope="CLASS",
+            entity="service.tier2",
+            statement="a config change on a tier2 service correlates with an error-rate spike",
+        ),
+    )
+
+    async def embed(texts: Any) -> tuple[tuple[float, ...], ...]:
+        return tuple((1.0, 0.0) for _ in texts)  # everything is a perfect match
+
+    result = run(
+        [a_classification(), a_diagnosis(), a_proposal(target="pricing-api")],
+        store=store,
+        embed=embed,
+        trigger=a_trigger(target="pricing-api"),
+    )
+
+    assert result.outcome == "ESCALATED"
+    entry = ledger(store)[0]
+    assert entry["target"] == "pricing-api"
+    assert entry["belief_ids"] == []
+    for span in spans.get_finished_spans():
+        if span.name != telemetry.SPAN_REASONING_CHAIN or span.attributes is None:
+            continue
+        assert span.attributes["provenance.recall.belief_ids"] == ("belief-service.tier2",)
+        assert span.attributes["provenance.recall.nominated_ids"] == ("belief-service.tier2",)
