@@ -118,6 +118,21 @@ AGENTS: tuple[Agent, ...] = (
         standing="GOOD",
         rejection_window=(),
     ),
+    # §5.9's Memory Analyst (item 23). It holds both memory domains because a generalization
+    # is about a class of entity rather than about one domain's incident, and it holds no tool
+    # scope for the same reason the domain agents do not: it proposes beliefs, never actions.
+    # Its own registry entry rather than committing as `sre-infra-agent` is what makes §3.4
+    # mean something here -- a bad generalization costs the Analyst standing, not the SRE
+    # agent's, and the trace names who actually proposed it.
+    Agent(
+        id="memory-analyst",
+        version="v1",
+        public_key="",
+        tool_scope=(),
+        memory_domains=("infrastructure", "supply-chain"),
+        standing="GOOD",
+        rejection_window=(),
+    ),
     Agent(
         id="remediation-planner",
         version="v1",

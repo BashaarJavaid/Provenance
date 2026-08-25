@@ -28,6 +28,10 @@ ORCHESTRATOR = os.environ.get("PROVENANCE_MODEL_ORCHESTRATOR", "gemini-2.5-pro")
 DOMAIN = os.environ.get("PROVENANCE_MODEL_DOMAIN", "gemini-2.5-pro")
 PLANNER = os.environ.get("PROVENANCE_MODEL_PLANNER", "gemini-2.5-pro")
 VERIFICATION = os.environ.get("PROVENANCE_MODEL_VERIFICATION", "gemini-3.5-flash")
+# §5.9's Memory Analyst (item 23). Pro, like the other extraction roles: it reads three
+# beliefs and writes the sentence they have in common, which is the same kind of work the
+# domain agents do. It runs once from a seeder, never per incident, so it costs one call.
+ANALYST = os.environ.get("PROVENANCE_MODEL_ANALYST", "gemini-2.5-pro")
 
 # Item 16's recall index (§6.6). Not a reasoning role -- it nominates candidate belief ids and
 # decides nothing, which is why ADR-005 lets the index be dumb. Probed live before it was

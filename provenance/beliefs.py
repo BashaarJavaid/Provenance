@@ -96,7 +96,9 @@ class BeliefVersion:
 
     `statement` is §3.2's CLASS-only field — the sentence a class belief asserts, which is what
     item 16's recall index embeds. An ENTITY version legitimately has none, so it defaults to
-    empty rather than being required.
+    empty rather than being required. `derived_from` (item 23) is the other one: the constituent
+    ENTITY belief ids a class belief generalizes, which §6.2 requires at least three of and which
+    the Policy Engine reads to compute the cap. Both default empty for the same reason.
     """
 
     belief_id: str
@@ -114,6 +116,7 @@ class BeliefVersion:
     signature: str
     supersedes: int | None = None
     statement: str = ""
+    derived_from: tuple[str, ...] = ()
     half_life_days: float = 0.0
     expires_at: str = ""
     on_expiry: str = "REVERIFY"
@@ -141,6 +144,13 @@ def payload_hash(payload: object) -> str:
     return hashlib.sha256(repr(payload).encode()).hexdigest()
 
 
+# The prefix `belief_id_for()` builds, named because item 23 has a second reader: §2.2 has to
+# recognise an evidence item whose `source_id` is a belief id before it can refuse one that
+# names a CLASS belief (§6.2). A literal `"belief-"` in `policy.py` would be the disagreement
+# this function exists to prevent, one file over.
+BELIEF_PREFIX = "belief-"
+
+
 def belief_id_for(entity: str) -> str:
     """The one home for the `belief-{entity}` convention (§6.1's exact key).
 
@@ -148,7 +158,7 @@ def belief_id_for(entity: str) -> str:
     copy. The exact-key read and the write have to agree on it or recall silently finds
     nothing, which is the kind of disagreement a shared function makes impossible.
     """
-    return f"belief-{entity}"
+    return f"{BELIEF_PREFIX}{entity}"
 
 
 def evidence_id(source_id: str, observed_at: str) -> str:
@@ -231,9 +241,11 @@ def from_document(belief_id: str, version: int, data: dict[str, Any] | None) -> 
             committed_by=data["committed_by"],
             signature=data["signature"],
             supersedes=data["supersedes"],
-            # §3.2 makes `statement` CLASS-only, so absent is what an ENTITY version is
-            # supposed to look like — not a malformed document. The one `.get` in here.
+            # §3.2 makes `statement` and `derived_from` CLASS-only, so absent is what an
+            # ENTITY version is supposed to look like — not a malformed document. The only
+            # two `.get`s in here, and for that reason.
             statement=data.get("statement", ""),
+            derived_from=tuple(data.get("derived_from", ())),
             half_life_days=data["half_life_days"],
             expires_at=data["expires_at"],
             on_expiry=data["on_expiry"],

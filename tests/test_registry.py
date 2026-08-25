@@ -387,8 +387,16 @@ def test_an_unreachable_registry_raises_rather_than_silently_dropping_the_counte
 # --- the fixture ------------------------------------------------------------------------
 
 
-def test_the_fleet_is_the_three_phase_2_identities() -> None:
-    assert set(AGENTS_BY_ID) == {"sre-infra-agent", "supply-chain-agent", "remediation-planner"}
+def test_the_fleet_is_the_identities_that_hold_authority() -> None:
+    # The three Phase 2 identities plus item 23's Memory Analyst. The Orchestrator and the
+    # Verification Agent are deliberately absent: §3.4 records authority, and neither proposes
+    # an action nor writes a belief, so there is nothing about them to record.
+    assert set(AGENTS_BY_ID) == {
+        "sre-infra-agent",
+        "supply-chain-agent",
+        "memory-analyst",
+        "remediation-planner",
+    }
     assert len(AGENTS_BY_ID) == len(registry.AGENTS), "agent ids are unique"
     for agent in registry.AGENTS:
         assert agent.version == "v1"

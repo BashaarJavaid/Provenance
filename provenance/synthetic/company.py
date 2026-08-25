@@ -170,6 +170,33 @@ SERVICES: tuple[Service, ...] = (
         error_rate=0.01,
         healthy=True,
     ),
+    # Item 23's constituents, with checkout-api. Never appear in an incident either: they
+    # exist so the §6.2 class belief has the three entity beliefs it needs to generalize
+    # from, and so those three sit on services no verify script's teardown deletes. The
+    # inventory-api belief is created and destroyed by every run of verify_incident_one.py,
+    # and pricing-api has to stay belief-free or item 24 proves nothing.
+    Service(
+        id="orders-api",
+        name="Orders API",
+        tier="tier2",
+        domain="sre",
+        description="Order state, fulfillment handoff, and returns.",
+        current_config_version=None,
+        known_good_version=None,
+        error_rate=0.01,
+        healthy=True,
+    ),
+    Service(
+        id="search-api",
+        name="Search API",
+        tier="tier2",
+        domain="sre",
+        description="Catalog search and faceted browse for the storefront.",
+        current_config_version=None,
+        known_good_version=None,
+        error_rate=0.01,
+        healthy=True,
+    ),
 )
 
 CONFIG_VERSIONS: tuple[ConfigVersion, ...] = (

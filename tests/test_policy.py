@@ -17,6 +17,7 @@ repetition outright. Neither consults a model.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -1125,3 +1126,244 @@ def test_a_retracted_belief_can_be_re_asserted_only_as_an_ordinary_flip() -> Non
     )
     assert (fresh.outcome, fresh.reason) == ("COMMIT", "ABOVE_THRESHOLD")
     assert store.collections[VERSIONS]["3"]["status"] == STATUS
+
+
+# --- §6.2's class beliefs and the advisory cap (item 23) --------------------------------------
+
+CLASS_NAME = "service.config_deploy"
+CLASS_BELIEF_ID = f"belief-{CLASS_NAME}"
+CLASS_VERSIONS = f"beliefs/{CLASS_BELIEF_ID}/versions"
+CLASS_STATEMENT = (
+    "Config deploys on tier-2 services correlate with error-rate spikes within ten minutes."
+)
+CONSTITUENTS = ("checkout-api", "orders-api", "search-api")
+
+
+def a_store_with_the_analyst(**overrides: Any) -> FakeFirestore:
+    """The engine's store plus a `memory-analyst` holding the domain (item 23)."""
+    store = a_store(**overrides)
+    analyst = registry.Agent(
+        id="memory-analyst",
+        version="v1",
+        public_key="",
+        tool_scope=(),
+        memory_domains=("infrastructure",),
+        standing="GOOD",
+        rejection_window=(),
+    )
+    store.collections["agents"]["memory-analyst"] = registry.to_document(analyst)
+    return store
+
+
+def an_observation_of(entity: str, source_class: str = "verified_system_observation") -> Any:
+    """One fresh reading of some other service, distinct from `inventory-api`'s."""
+    source_id = f"firestore:services/{entity}"
+    stamp = NOW.strftime(policy.TIMESTAMP)
+    return an_evidence(
+        id=beliefs.evidence_id(f"{source_id}|{source_class}", stamp),
+        source_id=source_id,
+        source_class=source_class,
+    )
+
+
+def seed_constituents(store: FakeFirestore, *source_classes: str) -> tuple[str, ...]:
+    """One entity belief per constituent service, each on the same evidence shape."""
+    classes = source_classes or ("verified_system_observation",)
+    for entity in CONSTITUENTS:
+        asyncio.run(
+            policy.commit(
+                entity=entity,
+                domain=DOMAIN,
+                status=STATUS,
+                evidence=[an_observation_of(entity, sc) for sc in classes],
+                agent_id="sre-infra-agent",
+                now=NOW,
+                client=store,
+            )
+        )
+    return tuple(beliefs.belief_id_for(entity) for entity in CONSTITUENTS)
+
+
+def commit_class(
+    store: FakeFirestore,
+    derived_from: Sequence[str],
+    *,
+    status: str = STATUS,
+    evidence: list[policy.Evidence] | None = None,
+    now: datetime = NOW,
+) -> Any:
+    return asyncio.run(
+        policy.commit(
+            entity=CLASS_NAME,
+            domain=DOMAIN,
+            status=status,
+            evidence=evidence if evidence is not None else [],
+            agent_id="memory-analyst",
+            now=now,
+            client=store,
+            scope="CLASS",
+            statement=CLASS_STATEMENT,
+            derived_from=derived_from,
+        )
+    )
+
+
+def a_class_belief(store: FakeFirestore) -> Any:
+    """Three constituents at 0.60 each, generalized. The fixture the cap tests share."""
+    return commit_class(store, seed_constituents(store))
+
+
+def test_a_class_belief_lands_below_its_weakest_constituent(
+    spans: InMemorySpanExporter,
+) -> None:
+    """§6.2: "capped: max 0.75, always below its weakest constituent".
+
+    Three constituents each rest on one fresh `verified_system_observation`, so each is at
+    0.60 and the union is one distinct source class and also 0.60. The margin is what binds:
+    0.60 − 0.05 = 0.55, which is below every constituent and clears the 0.50 door. The point
+    is that the number is *reduced* after §4.3 has run, and by arithmetic a reader can check.
+    """
+    store = a_store_with_the_analyst()
+    result = a_class_belief(store)
+
+    assert (result.outcome, result.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert result.confidence == pytest.approx(0.55)
+    stored = store.collections[CLASS_VERSIONS]["1"]
+    assert stored["scope"] == "CLASS"
+    assert stored["statement"] == CLASS_STATEMENT
+    assert tuple(stored["derived_from"]) == tuple(
+        beliefs.belief_id_for(entity) for entity in CONSTITUENTS
+    )
+    # Its evidence is the union of what its constituents rest on, not something it brought.
+    assert len(stored["evidence"]) == len(CONSTITUENTS)
+    for entity in CONSTITUENTS:
+        assert (
+            policy.confidence([an_observation_of(entity)], domain=DOMAIN, now=NOW)
+            > result.confidence
+        )
+    span = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT][-1]
+    assert span.attributes is not None
+    assert span.attributes["provenance.belief.scope"] == "CLASS"
+    # A class belief citing nothing is the one thing this span must never report: its
+    # evidence is derived inside the pipeline, and the span reports what was measured.
+    assert len(span.attributes["provenance.evidence.ids"]) == len(CONSTITUENTS)
+
+
+def test_the_ceiling_binds_when_the_margin_does_not() -> None:
+    """The other half of §6.2's cap. Two constituent classes put the weakest at 0.82, so the
+    margin would allow 0.77 — and `CLASS_CAP` is what stops it. Without both numbers, a class
+    belief resting on enough corroboration would outrank the flip door it may never authorize.
+    """
+    store = a_store_with_the_analyst()
+    ids = seed_constituents(store, "verified_system_observation", "third_party_audit")
+    result = commit_class(store, ids)
+
+    weakest = policy.confidence(
+        [
+            an_observation_of(CONSTITUENTS[0], sc)
+            for sc in ("verified_system_observation", "third_party_audit")
+        ],
+        domain=DOMAIN,
+        now=NOW,
+    )
+    assert weakest == pytest.approx(0.82)
+    assert weakest - policy.CLASS_MARGIN > policy.CLASS_CAP, "the margin must not be what binds"
+    assert result.confidence == pytest.approx(policy.CLASS_CAP)
+
+
+def test_a_class_belief_may_never_be_the_evidence_for_a_commit() -> None:
+    """ROADMAP item 23's verify line, and §6.2's hard cap.
+
+    A class belief "may never be the evidence that authorizes an action or commits an entity
+    belief". Recall already keeps class beliefs out of `authorizations/{id}` by type; this is
+    the other half, and until item 23 nothing could even express the attempt.
+    """
+    store = a_store_with_the_analyst()
+    a_class_belief(store)
+    before = dict(store.collections["agents"]["sre-infra-agent"])
+
+    result = commit(store, [an_evidence(source_id=CLASS_BELIEF_ID)])
+
+    assert (result.outcome, result.reason) == ("REJECT", "CLASS_BELIEF_NOT_EVIDENCE")
+    assert VERSIONS not in store.collections, "a refused commit wrote a version"
+    window = store.collections["agents"]["sre-infra-agent"]["rejection_window"]
+    assert len(window) == len(before["rejection_window"]) + 1
+    assert window[-1]["reason"] == "CLASS_BELIEF_NOT_EVIDENCE"
+
+
+def test_an_entity_belief_cited_as_evidence_is_not_refused() -> None:
+    """The control, and the reason the check resolves the id rather than matching its shape.
+
+    §6.2 caps *generalizations*. Refusing every evidence item whose `source_id` looks like a
+    belief id would pass the test above while forbidding something no document forbids — so
+    this asserts the entity case still commits.
+    """
+    store = a_store_with_the_analyst()
+    seed_constituents(store)
+
+    result = commit(store, [an_evidence(source_id=beliefs.belief_id_for(CONSTITUENTS[0]))])
+
+    assert (result.outcome, result.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+
+
+def test_two_entity_beliefs_are_not_a_generalization() -> None:
+    """§6.2's "≥3", enforced by the engine rather than by the Analyst's restraint."""
+    store = a_store_with_the_analyst()
+    ids = seed_constituents(store)
+
+    result = commit_class(store, ids[:2])
+
+    assert (result.outcome, result.reason) == ("REJECT", "INSUFFICIENT_CONSTITUENTS")
+    assert CLASS_VERSIONS not in store.collections
+    # Not counted: how many entity beliefs exist is a fact about the store's population, not
+    # a statement about the honesty of the evidence the proposal brought (§3.4).
+    assert store.collections["agents"]["memory-analyst"]["rejection_window"] == []
+
+
+def test_a_generalization_over_generalizations_is_refused() -> None:
+    """§6.2 derives a class belief from *entity* beliefs. A class belief among its own
+    constituents would let confidence be laundered upward one cap at a time."""
+    store = a_store_with_the_analyst()
+    ids = seed_constituents(store)
+    a_class_belief(store)
+
+    result = asyncio.run(
+        policy.commit(
+            entity="service.other_class",
+            domain=DOMAIN,
+            status=STATUS,
+            evidence=[],
+            agent_id="memory-analyst",
+            now=NOW,
+            client=store,
+            scope="CLASS",
+            statement=CLASS_STATEMENT,
+            derived_from=[*ids[:2], CLASS_BELIEF_ID],
+        )
+    )
+    assert (result.outcome, result.reason) == ("REJECT", "INSUFFICIENT_CONSTITUENTS")
+
+
+def test_the_constituents_must_carry_the_status_being_generalized() -> None:
+    """ "Sharing a structural signature" is the status they hold in common — the only part of
+    §6.2's phrase code can check. Without it the engine checks a count and takes the signature
+    on the Analyst's word, and a RETRACTED or UNKNOWN constituent would qualify too, since
+    neither can match the status a live generalization asserts."""
+    store = a_store_with_the_analyst()
+    ids = seed_constituents(store)
+
+    result = commit_class(store, ids, status=CLEARED)
+
+    assert (result.outcome, result.reason) == ("REJECT", "INSUFFICIENT_CONSTITUENTS")
+    assert CLASS_VERSIONS not in store.collections
+
+
+def test_a_class_proposal_may_not_bring_its_own_evidence() -> None:
+    """A class belief's evidence is derived from its constituents and is never proposed — that
+    is what stops the Analyst choosing what its own generalization rests on. No agent can
+    reach this, so it is a bug in a caller and reported as one rather than as a refusal."""
+    store = a_store_with_the_analyst()
+    ids = seed_constituents(store)
+
+    with pytest.raises(ValueError, match="derives its evidence"):
+        commit_class(store, ids, evidence=[an_evidence()])
