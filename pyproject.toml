@@ -26,6 +26,11 @@ dependencies = [
     # the package, so it has to ship in the Cloud Run image. Not a google-adk transitive
     # dep — it was not installed at all before item 4.
     "google-cloud-firestore>=2.21,<3",
+    # Model Armor screening on ingest (ROADMAP item 25). provenance/ingest.py imports it, so
+    # it ships in the Cloud Run image the way google-cloud-firestore does. It resolves with no
+    # movement in google-adk's pins — notably the opentelemetry-* caps at <=1.42.1 — which is
+    # what the one live incident regression in item 25 was run to confirm.
+    "google-cloud-modelarmor>=0.7,<1",
 ]
 
 # portunusmcp is deliberately NOT listed here. It pins fastapi==0.115.6, which pip
