@@ -8,6 +8,35 @@
 
 ---
 
+> ## ⚠ Frozen historical artifact — superseded, and stale in one place
+>
+> This is the **original spec**, kept verbatim as the project's origin record. It is no
+> longer maintained and **it is not the source of truth for anything**. Where it disagrees
+> with the documents below, they win.
+>
+> **Stale:** §5, §6 and §14 say **"Gemini 3.5 Pro"**. That model does not exist — the
+> Vertex catalog has no GA Pro anywhere in the 3.x line (ROADMAP item 1, Aug 21). The four
+> reasoning roles run on **`gemini-2.5-pro`**; verification stays on `gemini-3.5-flash`.
+> The architecture diagram in §5 therefore disagrees with the otherwise identical diagram
+> in `README.md`, which is the correct one.
+>
+> **Where each section now lives:**
+>
+> | Spec § | Current home |
+> |---|---|
+> | §1 claim, §2 problem, §3 core abstraction, §5 diagram, §14 tech stack, §17 disclosure | [`README.md`](./README.md) |
+> | §6 fleet roles, §7 determinism boundary, §8 memory design, §11 verification, §12 synthetic company, §15 observability & UI | [`ARCHITECTURE.md`](./ARCHITECTURE.md) |
+> | §10 security, §20 remaining risks | [`THREAT_MODEL.md`](./THREAT_MODEL.md) |
+> | §16 build phases | [`ROADMAP.md`](./ROADMAP.md) |
+> | §18 generality claim | [`docs/generality-report.md`](./docs/generality-report.md) |
+> | **§13 demo script** | **[`docs/demo-script.md`](./docs/demo-script.md)** — extracted, live |
+> | **§4 track fit, §21 submission logistics** | **[`docs/submission.md`](./docs/submission.md)** — extracted, live |
+> | §19 resolved design questions | kept here; the answers themselves live in `ARCHITECTURE.md` and `docs/adr/` |
+>
+> Nothing below this line has been edited.
+
+---
+
 ## 1. The claim
 
 **An LLM never decides what the organization does, and never decides what the organization believes.**

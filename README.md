@@ -8,7 +8,7 @@ A fleet of agents runs continuously against a live enterprise: it detects operat
 
 Self-healing is the surface. Governed institutional belief is the product.
 
-> Built for the **All Things Agentic Hackathon** (Devpost/Google), Fortified Enterprise Fleet track. Deadline: August 31, 2026, 5:00 PM PDT. The full project spec lives in [`self-healing-enterprise-project-spec (1).md`](<./self-healing-enterprise-project-spec (1).md>).
+> Built for the **All Things Agentic Hackathon** (Devpost/Google), Fortified Enterprise Fleet track. Deadline: August 31, 2026, 5:00 PM PDT. How the project maps to the track's requirements is in [`docs/submission.md`](./docs/submission.md).
 
 ## Why
 
@@ -129,12 +129,12 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
 
 Four properties are load-bearing and non-negotiable in implementation:
 
-1. **There is no direct path from any reasoning agent to a state-mutating action.** If a second path exists, the security story collapses.
-2. **The memory write path mirrors the action path exactly.** Probabilistic recommends, deterministic decides — for beliefs as for actions.
-3. **No LLM-generated number is an input to a deterministic decision.** Confidence is computed from evidence structure; risk is a table lookup.
-4. **The registry is read at request time, not at boot.** An agent's standing can change mid-run and the next authorization reflects it.
+1. **There is no direct path from any reasoning agent to a state-mutating action.**
+2. **The memory write path mirrors the action path exactly.**
+3. **No LLM-generated number is an input to a deterministic decision.**
+4. **The registry is read at request time, not at boot.**
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design: every component in depth, the determinism boundary, the memory model, failure modes, observability, testing strategy, and deployment.
+Each is stated with what it rules out in [`ARCHITECTURE.md`](./ARCHITECTURE.md) §1.1 — which is also the full design: every component in depth, the determinism boundary, the memory model, failure modes, observability, testing strategy, and deployment.
 
 ## Threat model (summary)
 
@@ -224,7 +224,7 @@ non-zero if any is missing or does not match the fixture.
 
 ## Run the demo
 
-*To be filled in once the incident arc is buildable (Phase 3 onward). The demo is one continuous incident arc — act, remember, generalize, survive an attack, know what it doesn't know — targeted at 3:40 of video. Script and beats in the spec, §13.*
+*To be filled in once the arc is recordable (Phase 14). One continuous incident arc — act, remember, generalize, survive an attack, know what it doesn't know — targeted at 3:40 of video. Script and beats: [`docs/demo-script.md`](./docs/demo-script.md).*
 
 ## Tech stack
 
@@ -250,7 +250,9 @@ non-zero if any is missing or does not match the fixture.
 - [`docs/adr/`](./docs/adr/) — one file per architecture decision, including why common alternatives weren't chosen.
 - [`docs/generality-report.md`](./docs/generality-report.md) — spec §18's generality claim as a number: what the second domain actually cost, itemized, with the prediction a third domain has to beat.
 - [`ROADMAP.md`](./ROADMAP.md) — the build order as a living checklist.
-- [`self-healing-enterprise-project-spec (1).md`](<./self-healing-enterprise-project-spec (1).md>) — the original project spec this documentation suite was derived from; includes the demo script (§13) and submission logistics (§21).
+- [`docs/demo-script.md`](./docs/demo-script.md) — the demo, beat by beat: the 3:40 incident arc, the attack, and the mandatory on-screen Cloud Run shot.
+- [`docs/submission.md`](./docs/submission.md) — how this maps to the track's requirements, plus judging weights, bonus points and submission logistics.
+- [`self-healing-enterprise-project-spec (1).md`](<./self-healing-enterprise-project-spec (1).md>) — the original project spec this suite was derived from, kept as a **frozen historical artifact**; its header maps each section to the document that superseded it.
 
 ## Roadmap
 

@@ -18,9 +18,35 @@ Provenance — a fleet of agents that detects, diagnoses, fixes, and verifies en
 - `docs/adr/` — one file per architecture decision, including why several common alternatives weren't chosen. Load the specific ADR relevant to the component being touched, not all of them by default.
 - `docs/generality-report.md` — spec §18's generality claim as a measured number: what the second domain cost, itemized, and the ≈10-line prediction a third domain has to beat. Load this before touching `incident.DOMAINS`, `policy.HALF_LIFE_DAYS` or anything that claims the control plane is domain-agnostic.
 - `ROADMAP.md` — the fourteen-phase build order as a living checklist. At session start, read the top paragraph and the **open** item. Completed items' `— **done**:` notes are the changelog — load one when touching that component, not all of them. Update ROADMAP as items complete.
-- `self-healing-enterprise-project-spec (1).md` — the original spec: demo script (§13), synthetic-company details (§12), submission logistics (§21). Load for demo/submission work.
+- `docs/demo-script.md` — the 3:40 demo choreography, beat by beat (spec §13, extracted). Load for demo/rehearsal work (items 37–38).
+- `docs/submission.md` — track requirements, judging weights, bonus points, submission logistics (spec §4 and §21, extracted). Load for items 33–36 and 38.
+- `self-healing-enterprise-project-spec (1).md` — **frozen historical artifact**, superseded by the files above and stale on model names (it says "Gemini 3.5 Pro"). Its header maps every section to its current home. Don't edit it; don't cite it as current.
 
 Don't load `ARCHITECTURE.md`, `THREAT_MODEL.md`, or the ADRs in full for unrelated tasks (e.g. a pure UI tweak or demo-recording step) — pull in only the file relevant to the current task.
+
+## Where new information goes
+
+**One fact, one home, everywhere else links.** The doc set was audited on Aug 25 and about half of it was the same content written three times — every shipped item narrated once in its ADR, again in an `ARCHITECTURE.md` "As built" block, and again in its `ROADMAP.md` done-note. That is the failure mode this section exists to prevent. It is the operational form of the rule at the top of this file: standing orders here, what shipped in `ROADMAP.md`, why it looks that way in `docs/adr/`.
+
+| What you have to write down | Its one home | Everywhere else |
+|---|---|---|
+| A decision, and the alternatives you rejected | the item's `docs/adr/ADR-0NN` | link to it — never restate the reasoning |
+| What the design *is* — a rule, an object shape, a pipeline stage | `ARCHITECTURE.md` §N | the ADR's **Decision** paragraph may summarize it; nothing else may |
+| What shipped, what ran live, what deviated | the ROADMAP item's `— **done**:` note | link by item number |
+| A threat, a disclosed limit, an assumption the design rests on | `THREAT_MODEL.md` | link — don't re-derive the mechanism, point at §N or the ADR |
+| A measured number and the method behind it | its own `docs/*-report.md` | cite the headline sentence + link; never copy the table |
+| A standing order, or a trap that would strand the fleet | this file | — |
+| Demo choreography / submission logistics | `docs/demo-script.md` / `docs/submission.md` | — |
+
+Rules that follow from it:
+
+- **Grep before you write a paragraph.** Pick a distinctive phrase from what you're about to say and search the corpus. If it's already written, link instead. This is thirty seconds and it is the whole discipline.
+- **An `ARCHITECTURE.md` "As built" block carries three things only:** the module path, the constant names and their values (these often live nowhere else — `CREDENTIAL_TTL_SECONDS = 300`, `CLASS_MARGIN = 0.05`, `SIMILARITY_FLOOR = 0.55`), and any place the implementation **corrects** the design text above it. Reasoning goes to the ADR; live evidence goes to the ROADMAP item.
+- **A ROADMAP done-note carries what the ADR cannot:** what shipped, live evidence (trace ids, read-backs, what was asserted), mutation-check results, findings discovered by running it, deviations from the item's own text, registry/state changes, and cost. Design reasoning belongs in the ADR — write it there and point at it.
+- **Never restate a frozen number.** `1+1+0+0 = 2` and `4+2+2+3 = 11`, `SUP-042`'s 0.575 → 0.770, §4.3's base weights, the generality figures — each has one home. Cite the section; copying the number is how the docs come to disagree with themselves.
+- **Conventions that apply to every item** go once in `ROADMAP.md`'s "Conventions these notes assume" block at the top of the Build Order — not repeated per item.
+- **The spec is frozen.** Never add to `self-healing-enterprise-project-spec (1).md`, and don't cite it as current; its header maps each section to the document that superseded it.
+- **Check the insertion point when appending to a ROADMAP item.** Two blocks were found in the wrong item during the Aug 25 audit (item 11's trace-UI findings sat in item 6, and item 19's mutation record overwrote item 13's). Both were single bad offsets in an otherwise clean commit. Read the item number above *and* below the line you're adding.
 
 ## Conventions
 
@@ -40,7 +66,7 @@ Further conventions:
 - Beliefs are append-only: supersession and retraction, never overwrite, never delete. Nothing under `provenance/` modifies or deletes a version. Don't add a `current_version` pointer; `current()` walks `versions/1, 2, …`.
 - Fail-closed is the default posture for any subsystem failure that would silently weaken a guarantee (`ARCHITECTURE.md` §7.3). If unsure whether something should fail open or closed, it's closed.
 - No ML/LLM-based risk scoring — a deliberate constraint (see `docs/adr/ADR-003`), not a gap to fill in later. `risk.BASE` is the only home of `base[action_class]`; a third tool cannot ship without a base score. Don't add a third supplier tool to reach execution — the supply-chain incident ending `HELD` at 11 is the design.
-- PortunusMCP is consumed strictly as a library dependency (identity, RBAC/ABAC, ECDSA signing). All track-facing authorization logic — risk table, registry standing, typed-action fields, hold/resume — is new code in this repo, and must stay visibly so in the commit history (contest disclosure requirement; see `README.md`). It installs as a separate `--no-deps` step and **must never go in `pyproject.toml`**. CI must not gate on `pip check`. The Dockerfile's two-step install must stay two steps in that order.
+- PortunusMCP is a library dependency only; all track-facing authorization logic is new code here and must stay visibly so in the commit history (disclosure table in `README.md`, reasoning in `ADR-004`). It installs as a separate `--no-deps` step and **must never go in `pyproject.toml`**. CI must not gate on `pip check`. The Dockerfile's two-step install must stay two steps in that order.
 - Emit spans only through `provenance/telemetry.py` helpers. Don't call the OTel tracer directly, and don't invent a new span shape or a content-bearing attribute key without changing `ARCHITECTURE.md` §8.1 and `tests/test_telemetry_schema.py` together. Attributes carry identifiers, hashes, enums and numbers — never content.
 - `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` is token-guarded and **fails closed when `PROVENANCE_TRIGGER_TOKEN` is unset** — don't remove the guard. `GET /trace` and `GET /belief/{entity}` are unauthenticated on purpose.
 - Deploy at `--max-instances=1` (the trace UI's span buffer is in-process) and `--min-instances=0`. Don't raise either for convenience.
