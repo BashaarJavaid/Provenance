@@ -48,6 +48,25 @@ _EXPORTER = attach_exporter()
 
 NOW = datetime(2026, 8, 22, 12, 0, 0, tzinfo=UTC)
 
+
+class FrozenClock(datetime):
+    """`datetime` with a stopped `now()`, so elapsed wall time inside an incident is zero.
+
+    Item 20 stamps each retry attempt with its *own* read time
+    (`scratch.observed_at = now + (datetime.now(UTC) - wall_start)`), which is what makes a
+    live refutation supersede rather than repeat itself. Offline that quietly turns the
+    machine's speed into a test input: `beliefs.TIMESTAMP` has second resolution, so whether
+    two attempts share a `(source_id, observed_at)` pair depends on whether they happened to
+    land in the same second. Freezing the clock makes that a fact of the fixture rather than a
+    race -- the same move the two explicit `now` values make in
+    `test_a_second_incident_supersedes_the_belief_the_first_one_wrote`, one incident down.
+    """
+
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:
+        return NOW
+
+
 PLANNER_KEY = ec.generate_private_key(ec.SECP256R1())
 PLANNER_PEM = (
     PLANNER_KEY.public_key()
@@ -580,7 +599,9 @@ def test_an_inconclusive_verification_writes_nothing_and_escalates(
     assert verified.status.status_code is not StatusCode.ERROR
 
 
-def test_a_refuted_verification_writes_the_negative_belief(spans: InMemorySpanExporter) -> None:
+def test_a_refuted_verification_writes_the_negative_belief(
+    spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """§7.2's second row (item 19): "Confirmed negative knowledge is real knowledge."
 
     Until item 19 this test asserted the opposite -- it was left deliberately red so that the
@@ -596,6 +617,7 @@ def test_a_refuted_verification_writes_the_negative_belief(spans: InMemorySpanEx
     not have raises, `run_incident()`'s blanket `except` turns that into `ESCALATED`, and this
     test would then pass on a fleet whose retry edge was broken.
     """
+    monkeypatch.setattr(incident, "datetime", FrozenClock)
     store = a_store(rollback_fails=True)
     result = run(
         [
@@ -613,11 +635,13 @@ def test_a_refuted_verification_writes_the_negative_belief(spans: InMemorySpanEx
     assert result.verification == "REFUTED"
     assert result.refuted_attempts == 2
     assert result.belief is not None
-    # The *last* attempt's commit. Both attempts observe inside one second here, so their
-    # `(source_id, observed_at)` pairs collide and §2.2 stage 3 refuses the second -- which is
-    # correct and is the same property `test_a_second_incident_supersedes_...` documents. Live,
-    # a model call separates them and the second commits as v2; `scripts/verify_refuted.py` is
-    # what asserts that. What matters here is that attempt 1's v1 was written and stands.
+    # The *last* attempt's commit. With the clock frozen both attempts observe at the same
+    # instant, so their `(source_id, observed_at)` pairs collide and §2.2 stage 3 refuses the
+    # second -- correct, and the same property `test_a_second_incident_supersedes_...`
+    # documents. Without `FrozenClock` this line asserts an accident rather than a rule: on a
+    # loaded runner the two attempts straddle a second and the retry correctly commits v2,
+    # which is what `scripts/verify_refuted.py` asserts live. What matters here is that
+    # attempt 1's v1 was written and stands.
     assert (result.belief.outcome, result.belief.reason) == ("REJECT", "NO_NEW_EVIDENCE")
     stored = store.collections["beliefs/belief-inventory-api/versions"]
     assert list(stored) == ["1"]
