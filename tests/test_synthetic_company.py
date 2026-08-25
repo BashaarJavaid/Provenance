@@ -64,11 +64,13 @@ def test_pricing_api_has_no_deploy_history() -> None:
     assert [v for v in company.CONFIG_VERSIONS if v.service_id == "pricing-api"] == []
 
 
-def test_two_tier2_services_beyond_the_sre_arc() -> None:
+def test_the_tier2_population_beyond_the_sre_arc() -> None:
     # §9: "two additional tier-2 services that never appear in an incident" — pricing-api
     # is one of them, which is what makes incident #3 land on a member of that population.
+    # Item 23 added two more (orders-api, search-api) to hold the class belief's three
+    # constituent entity beliefs; §12's two is a floor on this population, not a ceiling.
     extra = [s for s in company.SERVICES if s.id != "inventory-api"]
-    assert len(extra) == 2
+    assert len(extra) == 4
     assert all(s.tier == "tier2" for s in extra)
     assert "pricing-api" in {s.id for s in extra}
 

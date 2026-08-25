@@ -89,7 +89,7 @@ from services.gateway import signing
 
 from provenance import audit, beliefs, registry, telemetry
 from provenance.beliefs import TIMESTAMP, Evidence
-from provenance.telemetry import BeliefOutcome, SourceClass, Standing
+from provenance.telemetry import BeliefOutcome, BeliefScope, SourceClass, Standing
 
 # §4.3's published table, verbatim. `unverified_external_claim` is 0.00 — that is the
 # poisoning defense as arithmetic rather than as a model's opinion, and it is why a change
@@ -134,6 +134,18 @@ ON_EXPIRY = "REVERIFY"
 NEW_BELIEF_THRESHOLD = 0.50
 FLIP_THRESHOLD = 0.70
 
+# §6.2's cap on a class belief, as three numbers (item 23). "≥3 entity beliefs share a
+# structural signature" is the minimum support; "capped: max 0.75, always below its weakest
+# constituent" is the ceiling and the margin. `CLASS_MARGIN` is the one number here that no
+# document published before item 23 — §6.2 says "below" and does not say by how much — so it
+# is published here with the others rather than living as a `<` somewhere. It is the only
+# place in this module where §4.3's computed number is reduced after the formula has run, and
+# the reduction is itself arithmetic a reader can check: a generalization is never allowed to
+# be more certain than the observations it generalizes.
+CLASS_CAP = 0.75
+CLASS_MARGIN = 0.05
+CLASS_MIN_CONSTITUENTS = 3
+
 # Closed, for the same reason `gateway.DecisionReason` is closed: this lands on a span, and
 # §8.1 admits identifiers, enums and numbers but never prose.
 CommitReason = Literal[
@@ -147,6 +159,8 @@ CommitReason = Literal[
     "FLIP_UNSUPPORTED",
     "RETRACTION_UNSUPPORTED",
     "NOTHING_TO_RETRACT",
+    "CLASS_BELIEF_NOT_EVIDENCE",
+    "INSUFFICIENT_CONSTITUENTS",
     "VERSION_CONFLICT",
     "STORE_UNAVAILABLE",
 ]
@@ -174,9 +188,20 @@ UNKNOWN = "UNKNOWN"
 # and would have carried a new belief — it met a higher door, which is not a fact about the
 # agent's honesty. Counting it would degrade an agent for correctly reporting that its own
 # remediation failed. BELOW_THRESHOLD keeps everything below 0.50, which is where the
-# unverifiable claims are.
+# unverifiable claims are. CLASS_BELIEF_NOT_EVIDENCE is in (item 23) on the same test that
+# put RETRACTION_UNSUPPORTED in: it is a statement about what the agent brought as evidence,
+# and an agent repeatedly trying to launder an advisory generalization into authority is
+# exactly what §3.4's counter exists to notice. INSUFFICIENT_CONSTITUENTS is out on the
+# NOTHING_TO_RETRACT test: fewer than three entity beliefs exist is a fact about the store's
+# population, not about the proposal's honesty.
 COUNTED_REJECTIONS: frozenset[CommitReason] = frozenset(
-    {"BELOW_THRESHOLD", "FLIP_UNSUPPORTED", "RETRACTION_UNSUPPORTED", "NO_NEW_EVIDENCE"}
+    {
+        "BELOW_THRESHOLD",
+        "FLIP_UNSUPPORTED",
+        "RETRACTION_UNSUPPORTED",
+        "NO_NEW_EVIDENCE",
+        "CLASS_BELIEF_NOT_EVIDENCE",
+    }
 )
 
 
@@ -356,9 +381,30 @@ async def commit(
     agent_id: str,
     now: datetime,
     client: Any | None = None,
+    scope: BeliefScope = "ENTITY",
+    statement: str = "",
+    derived_from: Sequence[str] = (),
 ) -> BeliefCommit:
-    """Run §2.2 on one proposed belief. Returns a signed outcome; a REJECT is not an error."""
+    """Run §2.2 on one proposed belief. Returns a signed outcome; a REJECT is not an error.
+
+    The last three arguments are item 23's and default to the ENTITY behaviour every caller
+    before it had. A CLASS proposal (§6.2) names its constituents and its statement and brings
+    **no evidence of its own**: the set it is measured over is the union of what those
+    constituents already rest on, derived inside the pipeline. `entity` carries the class name
+    for a CLASS belief, which is what `tests/test_recall.py`'s fixtures have always assumed and
+    what keeps `belief_id_for()` the only id scheme.
+    """
+    if scope == "CLASS" and evidence:
+        # Not a refusal: no agent can reach this. `commit()`'s callers are our own code and the
+        # Analyst returns a class name and a sentence, never an `Evidence`. A caller supplying
+        # both is a bug in the caller, and the honest report of a bug is an exception.
+        raise ValueError("a CLASS proposal derives its evidence and may not be given any")
     belief_id = beliefs.belief_id_for(entity)
+    # A CLASS proposal's evidence set is derived inside the pipeline, and the span has to report
+    # what was measured rather than the nothing the caller passed. `_decide` fills this in; it
+    # stays empty on every path that existed before item 23, so `measured or evidence` is the
+    # old behaviour verbatim there.
+    measured: list[Evidence] = []
     verdict = await _decide(
         belief_id=belief_id,
         entity=entity,
@@ -368,6 +414,10 @@ async def commit(
         agent_id=agent_id,
         now=now,
         client=client,
+        scope=scope,
+        statement=statement,
+        derived_from=derived_from,
+        measured=measured,
     )
     return await _finish(
         verdict,
@@ -375,10 +425,11 @@ async def commit(
         entity=entity,
         domain=domain,
         status=status,
-        evidence=evidence,
+        evidence=measured or evidence,
         agent_id=agent_id,
         now=now,
         client=client,
+        scope=scope,
     )
 
 
@@ -440,6 +491,7 @@ async def _finish(
     agent_id: str,
     now: datetime,
     client: Any | None,
+    scope: BeliefScope = "ENTITY",
 ) -> BeliefCommit:
     """§2.2 stage 6, shared by both doors: the counter, the signature and the one span."""
     # The half that is not the span: a rejection whose cause is the agent's own
@@ -459,7 +511,7 @@ async def _finish(
         standing=_standing(verdict.agent),
         belief_id=belief_id,
         belief_version=verdict.version,
-        scope="ENTITY",
+        scope=scope,
         domain=domain,
         entity=entity,
         status=status,
@@ -504,6 +556,10 @@ async def _decide(
     now: datetime,
     client: Any | None,
     retracting: bool = False,
+    scope: BeliefScope = "ENTITY",
+    statement: str = "",
+    derived_from: Sequence[str] = (),
+    measured: list[Evidence] | None = None,
 ) -> _Verdict:
     """§2.2's stages, in order. The earliest refusal wins, and the write happens last.
 
@@ -527,6 +583,28 @@ async def _decide(
     if domain not in agent.memory_domains:
         return _Verdict("REJECT", "DOMAIN_NOT_HELD", 0.0, agent)
 
+    # §6.2's cap, enforced rather than trusted (item 23). A class belief "may never be the
+    # evidence that authorizes an action or commits an entity belief", and until now nothing
+    # could even express the attempt, so nothing could refuse it. An entity belief cited as
+    # evidence is *not* refused: §6.2 caps generalizations, and widening this to every belief
+    # id would forbid something no document forbids.
+    #
+    # It sits here, after the registry read, rather than at §2.2's stage 1, because it needs
+    # the store and item 12's rule is that the registry is read first — an agent whose standing
+    # has not been checked does not get reads of institutional memory performed on its behalf.
+    # Stage 1 as written is well-formedness, which the frozen `Evidence` dataclass already is.
+    for item in evidence:
+        if not item.source_id.startswith(beliefs.BELIEF_PREFIX):
+            continue
+        try:
+            cited_belief = await beliefs.current(item.source_id, client=client)
+        except beliefs.BeliefNotFound:
+            continue  # the id names no belief; not this check's business
+        except beliefs.BeliefStoreError:
+            return _Verdict("REJECT", "STORE_UNAVAILABLE", 0.0, agent)
+        if cited_belief.scope == "CLASS":
+            return _Verdict("REJECT", "CLASS_BELIEF_NOT_EVIDENCE", 0.0, agent)
+
     # The version at stake. A belief with no history is v1; one with a v1 in force is v2, and
     # `current()` raising rather than returning `None` is what keeps "the store was
     # unreadable" from being mistaken for "there is nothing here" (§7.3).
@@ -538,6 +616,47 @@ async def _decide(
         return _Verdict("REJECT", "STORE_UNAVAILABLE", 0.0, agent)
     version = 1 if previous is None else previous.version + 1
     supersedes = None if previous is None else previous.version
+
+    # §6.2, the rest of it (item 23). A class belief is a generalization over "≥3 entity
+    # beliefs sharing a structural signature", and both halves of that are checked here rather
+    # than trusted to the Analyst: the minimum support, and that every constituent is a
+    # *current entity* belief carrying the very status being generalized. A generalization over
+    # generalizations is not what §6.2 describes, and the shared status is the only part of
+    # "sharing a structural signature" that code can compare -- without it the engine would be
+    # checking a count and taking the signature on the Analyst's word. It is also what keeps a
+    # RETRACTED or UNKNOWN constituent out with no second rule, since neither can match the
+    # status a live generalization asserts -- laundering a withdrawn claim back into memory
+    # through a door §6.6 closes on the read side.
+    #
+    # `cap` is §6.2's ceiling: "max 0.75, always below its weakest constituent". The weakest is
+    # measured **live at `now`**, not read off the constituents' stored numbers — §4.3 is
+    # computed, the belief inspector recomputes it, and a class belief committed a fortnight
+    # later should not inherit a ceiling from evidence that has since decayed.
+    cap = 1.0
+    if scope == "CLASS":
+        if len(set(derived_from)) < CLASS_MIN_CONSTITUENTS:
+            return _Verdict("REJECT", "INSUFFICIENT_CONSTITUENTS", 0.0, agent, version, supersedes)
+        try:
+            constituents = [await beliefs.current(one, client=client) for one in derived_from]
+            # The evidence a class belief rests on is exactly what its constituents rest on,
+            # and it is assembled here so the Analyst never gets to choose it.
+            evidence = await beliefs.read_evidence(
+                sorted({i for c in constituents for i in c.evidence_ids}), client=client
+            )
+        except beliefs.BeliefNotFound:
+            return _Verdict("REJECT", "INSUFFICIENT_CONSTITUENTS", 0.0, agent, version, supersedes)
+        except beliefs.BeliefStoreError:
+            return _Verdict("REJECT", "STORE_UNAVAILABLE", 0.0, agent, version, supersedes)
+        if any(c.scope != "ENTITY" or c.status != status for c in constituents):
+            return _Verdict("REJECT", "INSUFFICIENT_CONSTITUENTS", 0.0, agent, version, supersedes)
+        if measured is not None:
+            measured.extend(evidence)
+        by_id = {item.id: item for item in evidence}
+        weakest = min(
+            confidence([by_id[i] for i in c.evidence_ids], domain=c.domain, now=now)
+            for c in constituents
+        )
+        cap = min(CLASS_CAP, weakest - CLASS_MARGIN)
 
     # §6.4 retracts "a belief committed in good faith that turns out to be wrong", so there
     # has to be one. An absent belief and an already-retracted one are the same answer: there
@@ -575,6 +694,12 @@ async def _decide(
     # door a door: over the accumulated set any threshold is free, since that set has already
     # cleared one. What §6.4 asks is how strong the case *against* the belief is.
     conf = confidence(new if retracting else (*known, *new), domain=domain, now=now)
+
+    # §6.2's cap is the one place in this module where a computed number is reduced after §4.3
+    # has run, and it is still arithmetic: `cap` is 1.0 for everything that is not a class
+    # belief, so this line is a no-op on every path that existed before item 23. Generalization
+    # is allowed to make the fleet faster, never to make it more confident.
+    conf = min(conf, cap)
 
     # Stage 5 — §4.3's thresholds and the conflict rule for whichever door this is. Which one
     # a proposal faces is decided by facts, not judgment: a retraction faces §6.4, a claimed
@@ -642,7 +767,7 @@ async def _decide(
     proposed = beliefs.BeliefVersion(
         belief_id=belief_id,
         version=version,
-        scope="ENTITY",
+        scope=scope,
         domain=domain,
         entity=entity,
         status=status,
@@ -654,6 +779,8 @@ async def _decide(
         committed_by="memory-policy-engine",
         signature=_sign(belief_id, version, outcome, "ABOVE_THRESHOLD", conf).signature,
         supersedes=supersedes,
+        statement=statement,
+        derived_from=tuple(derived_from),
         half_life_days=HALF_LIFE_DAYS[domain],
         expires_at=(now + timedelta(days=HALF_LIFE_DAYS[domain]))
         .astimezone(UTC)

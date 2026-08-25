@@ -327,3 +327,19 @@ def test_malformed_stored_evidence_raises() -> None:
 
     with pytest.raises(beliefs.BeliefStoreError):
         asyncio.run(beliefs.read_evidence(("ev-1",), client=store))
+
+
+def test_derived_from_round_trips_and_an_entity_version_carries_none() -> None:
+    """§3.2's other CLASS-only field (item 23). Absent is what an ENTITY version looks like,
+    not a malformed document, which is why `from_document` reads it with a default."""
+    store = FakeFirestore({})
+    generalized = a_version(1, belief_id="belief-service.config_deploy", scope="CLASS")
+    generalized = replace(generalized, derived_from=("belief-a", "belief-b", "belief-c"))
+    asyncio.run(beliefs.append(generalized, (an_evidence("ev-class"),), client=store))
+
+    read_back = asyncio.run(beliefs.current("belief-service.config_deploy", client=store))
+    assert read_back.derived_from == ("belief-a", "belief-b", "belief-c")
+
+    entity = a_version(1)
+    asyncio.run(beliefs.append(entity, (an_evidence("ev-entity"),), client=store))
+    assert asyncio.run(beliefs.current(entity.belief_id, client=store)).derived_from == ()
