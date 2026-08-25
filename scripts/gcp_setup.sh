@@ -35,9 +35,12 @@ echo "--> enabling APIs"
 # and nothing here bills while idle, so it costs nothing against the $300 ceiling.
 # run/cloudbuild/artifactregistry: what `./scripts/deploy.sh` needs (roadmap item 3).
 # Cloud Run at min-instances=0 bills nothing idle; Cloud Build minutes are free-tier here.
+# modelarmor: ingest screening (roadmap item 25). Free to 2M tokens/month standalone, billed
+# per call rather than per hour, so like the rest of this list it costs nothing while idle.
+# The template itself is `./scripts/setup_model_armor.py`, not this script.
 gcloud services enable aiplatform.googleapis.com firestore.googleapis.com \
   cloudtrace.googleapis.com run.googleapis.com cloudbuild.googleapis.com \
-  artifactregistry.googleapis.com --project="${PROJECT_ID}"
+  artifactregistry.googleapis.com modelarmor.googleapis.com --project="${PROJECT_ID}"
 
 # `gcloud run deploy --source` builds as the Compute Engine default service account, which
 # on a project created after mid-2024 has no build permissions and fails after the source
