@@ -333,6 +333,29 @@ async def class_statements(*, client: Any | None = None) -> tuple[tuple[str, str
     return tuple(found)
 
 
+async def belief_ids(*, client: Any | None = None) -> tuple[str, ...]:
+    """Every belief id in the store, read from root documents (item 29).
+
+    The Sweeper's walk (§6.5). Root documents again, for the reason `class_statements()` reads
+    them: a root holds no status, confidence or `expires_at`, so nothing here can shortcut to
+    "which beliefs are stale" — resolving that goes through `current()` like every other read of
+    what the organization believes, and ADR-005's guarantee that the index cannot see currency
+    survives an item that very much wants to query on it.
+
+    Raises rather than returning a partial list: a half-read collection is a sweep that did not
+    happen, not a sweep that found nothing.
+    """
+    try:
+        found = [
+            data["belief_id"]
+            async for snapshot in _db(client).collection(COLLECTION).stream()
+            if (data := snapshot.to_dict() or {}).get("belief_id")
+        ]
+    except GoogleAPIError as exc:
+        raise BeliefStoreUnavailable(str(exc)) from exc
+    return tuple(found)
+
+
 def evidence_from_document(item_id: str, data: dict[str, Any] | None) -> Evidence:
     """Parse one stored evidence item. Raises rather than defaulting, as `from_document` does."""
     if data is None:

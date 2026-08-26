@@ -58,7 +58,11 @@ Standing = Literal["GOOD", "DEGRADED", "SUSPENDED"]
 AuthOutcome = Literal["APPROVE", "APPROVE_NOTIFY", "HOLD", "DENY"]
 AuthStage = Literal["schema", "identity", "registry", "abac", "risk"]
 BeliefScope = Literal["ENTITY", "CLASS"]
-BeliefOutcome = Literal["COMMIT", "REJECT", "RETRACT"]
+# `EXPIRE` is item 29's and is the one outcome no agent proposes: §6.5's Sweeper downgrading a
+# belief whose clock ran out. It shares the shape rather than taking a fifth one because it is
+# the same §2.2 stage 6 — a status written, signed, and reported. Reusing COMMIT would make the
+# ledger say the organization committed a belief at the moment it stopped believing it.
+BeliefOutcome = Literal["COMMIT", "REJECT", "RETRACT", "EXPIRE"]
 SourceClass = Literal[
     "verified_system_observation",
     "third_party_audit",
@@ -478,7 +482,7 @@ def belief_commit(
     novel_count: int,
     supersedes: int | None = None,
 ) -> Iterator[BeliefRecorder]:
-    """The §2.2 memory write pipeline. COMMIT, REJECT and RETRACT share this shape."""
+    """The §2.2 memory write pipeline. COMMIT, REJECT, RETRACT and EXPIRE share this shape."""
     with _shape(
         SPAN_BELIEF_COMMIT,
         {

@@ -1,4 +1,4 @@
-"""The Memory Policy Engine — §2.2's pipeline, whole (items 10, 12–15).
+"""The Memory Policy Engine — §2.2's pipeline, whole (items 10, 12–15, 29).
 
 The mirror of the gateway: probabilistic recommends, deterministic decides, for beliefs as
 for actions (§1.1 property 2). Nothing here reasons. It reads standing, computes a number
@@ -9,7 +9,8 @@ Item 12 gave it the versioned store (`beliefs.py`), so a re-affirmation now comm
 superseding version and `SUPERSESSION_UNSUPPORTED` is gone rather than merely unused. Item 13
 wired stage 3 and widened stage 4 to the accumulated evidence set (`docs/adr/ADR-017`). Item 14
 opened the flip door and wired stage 6's counter (`docs/adr/ADR-018`). Item 15 added §6.4's
-retraction as the second public door (`docs/adr/ADR-019`). What runs today:
+retraction as the second public door (`docs/adr/ADR-019`); item 29 added §6.5's expiry as the
+third (`docs/adr/ADR-031`). What runs today:
 
 | §2.2 stage | Here |
 |---|---|
@@ -18,7 +19,7 @@ retraction as the second public door (`docs/adr/ADR-019`). What runs today:
 | 3. novelty check | `beliefs.novel()` over `(source_id, observed_at)`; nothing new is a REJECT |
 | 4. computed confidence | `confidence()`, §4.3's noisy-OR over the **accumulated** evidence |
 | 5. threshold + conflict rule | 0.50 for a new belief, 0.70 **plus** §6.3's class rule for a flip |
-| 6. outcome | COMMIT, RETRACT or REJECT, signed, one `belief.commit` span, counter written |
+| 6. outcome | COMMIT, RETRACT, EXPIRE or REJECT, signed, one span, counter written |
 
 **A status flip is two doors, not one.** §4.3 puts a flip behind 0.70 *and* §6.3 behind at
 least one evidence item of a `source_class` different from the class that established the
@@ -60,6 +61,12 @@ disproving items, and no class is ever removed from the set a later flip is meas
 against — so re-asserting a retracted status is an ordinary flip needing 0.70 and a class
 the whole chain does not already carry. This is what ADR-017's and ADR-018's revisit clauses
 asked and the answer is that the chain is only ever extended, retraction included.
+
+**The third door has no proposal, so most of the pipeline does not apply to it.** `expire()`
+is §6.5's clock, not a claim: nobody proposed anything, so there is no standing to read, no
+novelty to check and no threshold to clear — what is left is stage 6, plus one gate of its own.
+It is the one path here that writes a status no agent asked for, which is why it is named on
+the version and on the span rather than being reported as an ordinary commit.
 
 A rejected write now increments the proposing agent's standing counter — but only the
 refusals that are statements about its evidence, see `COUNTED_REJECTIONS`.
@@ -163,16 +170,37 @@ CommitReason = Literal[
     "INSUFFICIENT_CONSTITUENTS",
     "VERSION_CONFLICT",
     "STORE_UNAVAILABLE",
+    # Item 29's two, and the only pair here that is not a statement about an agent's evidence:
+    # `EXPIRED` is §6.5's clock having run out and `NOT_DUE` is `expire()` finding it had not,
+    # or finding a belief already `UNKNOWN` or `RETRACTED`. Neither is in `COUNTED_REJECTIONS`
+    # below — a sweep has no proposing agent, so there is nobody a refusal could count against.
+    "EXPIRED",
+    "NOT_DUE",
 ]
 
-# §3.2: "domain-typed; UNKNOWN and RETRACTED are universal". `RETRACTED` is the one status
-# this module writes by name — every other status is the caller's word for what its domain
-# believes. `UNKNOWN` is the second universal one and nothing writes it yet: §6.5's Staleness
-# Sweeper is item 29's. It is named here rather than there because item 16's recall has to
-# drop it from every read, and a read path that learns about a status only when something
-# starts writing it is one release of a stale belief informing a diagnosis (§7.3).
+# §3.2: "domain-typed; UNKNOWN and RETRACTED are universal". These two are the statuses this
+# module writes by name — every other status is the caller's word for what its domain believes.
+# `RETRACTED` is §6.4's disproven belief and `UNKNOWN` is §6.5's stale one, written by `expire()`
+# since item 29. `UNKNOWN` was named here from item 16 rather than from the item that started
+# writing it, because recall has to drop it from every read, and a read path that learns about a
+# status only when something starts writing it is one release of a stale belief informing a
+# diagnosis (§7.3).
+#
+# `UNKNOWN` carries no reason field. §6.5 writes it `UNKNOWN(reason=stale)`, and the Sweeper is
+# the only thing that writes it for the one reason §6.5 gives — so an `UNKNOWN` version is stale
+# by construction, and the `expires_at` it carries forward is the clock that fired. A second
+# writer with a second reason is what would make a field necessary; there is none.
 RETRACTED = "RETRACTED"
 UNKNOWN = "UNKNOWN"
+
+# Item 29. The Sweeper holds no registry record: it proposes nothing, reasons about nothing and
+# has no standing that could move, so §3.4's authority fields have nothing to read. It is named
+# on the version it writes and on that version's span anyway, because "a clock fired" and "an
+# agent asserted this" must not look alike to anyone reading either one. `committed_by` stays
+# `memory-policy-engine` on an expiry, which is true — this module is still the writer, and the
+# clock is only what asked.
+SWEEPER_ID = "staleness-sweeper"
+SWEEPER_VERSION = "v1"
 
 # §2.2 stage 6 increments the standing counter on a REJECT, and §3.4 narrows which ones:
 # "three rejected memory writes **lacking verifiable evidence**". These four are the
@@ -480,6 +508,129 @@ async def retract(
     )
 
 
+async def expire(*, belief_id: str, now: datetime, client: Any | None = None) -> BeliefCommit:
+    """§6.5's downgrade: the clock ran out, so the organization stops believing this. Third door.
+
+    The no-branch of §6.5 and the only one there is. The yes-branch asks whether a
+    re-verification source is available, and nothing in this system is one — the Verification
+    Agent judges a predicate declared before an execution, and a sweep has no execution and no
+    predicate. `docs/adr/ADR-031` records that rather than inventing a source.
+
+    Unlike `commit()` and `retract()` there is no proposal here and no proposing agent, so
+    §2.2's stages 2 through 5 have nothing to act on: no standing to read, no evidence to check
+    for novelty, no threshold to clear. What is left is stage 6 — a status, computed, signed and
+    reported — and one gate of its own, which is the clock.
+
+    The version in force is **re-read here** rather than taken from the caller, because the
+    Sweeper's walk and this write are two moments: a commit landing between them refreshes
+    `expires_at`, and downgrading a belief somebody just re-affirmed is the one wrong answer
+    this door can give. That narrows the race to `append()`'s `create()`, which loses rather
+    than clobbers and comes back as `VERSION_CONFLICT`.
+
+    Returns a signed outcome, as both other doors do; `NOT_DUE` is a refusal, not an error. A
+    store that cannot be **read** is the one thing that raises: there is no entity, no domain
+    and no status to report a decision about, so there is no decision. The Sweeper catches it
+    and comes back next tick (§7.3 — nothing is half-written, and the belief is left exactly as
+    it was, still past its clock).
+    """
+    in_force = await beliefs.current(belief_id, client=client)
+    # A belief already `UNKNOWN` or `RETRACTED` is not swept again — without this the Sweeper
+    # would append a version every tick forever. A version with no `expires_at` at all has no
+    # clock to run out and is left alone for the same reason.
+    due = (
+        in_force.status not in (UNKNOWN, RETRACTED)
+        and bool(in_force.expires_at)
+        and _parse(in_force.expires_at) <= now
+    )
+    if not due:
+        # The stored number, not a recomputed one: nothing was written, and recomputing would
+        # cost a read of every evidence item to say something about a belief left untouched.
+        return await _finish(
+            _Verdict(
+                "REJECT",
+                "NOT_DUE",
+                in_force.confidence,
+                version=in_force.version,
+                threshold=in_force.threshold,
+            ),
+            belief_id=belief_id,
+            entity=in_force.entity,
+            domain=in_force.domain,
+            status=in_force.status,
+            evidence=(),
+            agent_id=SWEEPER_ID,
+            now=now,
+            client=client,
+            scope=in_force.scope,
+            agent_version=SWEEPER_VERSION,
+            standing="GOOD",
+        )
+
+    evidence = await beliefs.read_evidence(in_force.evidence_ids, client=client)
+    # §4.3 recomputed as of the sweep — a computed number, never asserted (§1.1 property 3).
+    # It is exactly what the inspector's "as of now" line already renders, so the downgrade
+    # records the decayed truth at the moment the clock fired rather than a hardcoded 0.00.
+    conf = confidence(evidence, domain=in_force.domain, now=now)
+    version = in_force.version + 1
+    proposed = beliefs.BeliefVersion(
+        belief_id=belief_id,
+        version=version,
+        scope=in_force.scope,
+        domain=in_force.domain,
+        entity=in_force.entity,
+        status=UNKNOWN,
+        confidence=conf,
+        # Carried unchanged, all four: no gate was applied, so no threshold was faced; the
+        # evidence set is append-only and a downgrade subtracts nothing from it; and
+        # `expires_at` is the clock that fired, which is what makes the inspector's red
+        # "Nd ago" the visible reason this version exists. A fresh `now + half_life` would
+        # say a stale belief is good for another thirty days.
+        threshold=in_force.threshold,
+        evidence_ids=in_force.evidence_ids,
+        authority=f"{SWEEPER_ID}@{SWEEPER_VERSION} (§6.5)",
+        committed_at=now.astimezone(UTC).strftime(TIMESTAMP),
+        committed_by="memory-policy-engine",
+        signature=_sign(belief_id, version, "EXPIRE", "EXPIRED", conf).signature,
+        supersedes=in_force.version,
+        statement=in_force.statement,
+        derived_from=in_force.derived_from,
+        half_life_days=in_force.half_life_days,
+        expires_at=in_force.expires_at,
+        on_expiry=in_force.on_expiry,
+    )
+    outcome: BeliefOutcome = "EXPIRE"
+    reason: CommitReason = "EXPIRED"
+    try:
+        # No evidence is passed: every item is already stored by whatever committed the version
+        # this one supersedes, and `append()` is create-if-absent so re-citing one is a no-op.
+        await beliefs.append(proposed, (), client=client)
+    except beliefs.VersionConflict:
+        outcome, reason = "REJECT", "VERSION_CONFLICT"
+    except beliefs.BeliefStoreError:
+        outcome, reason = "REJECT", "STORE_UNAVAILABLE"
+    return await _finish(
+        _Verdict(
+            outcome,
+            reason,
+            conf,
+            version=version,
+            supersedes=in_force.version,
+            threshold=in_force.threshold,
+        ),
+        belief_id=belief_id,
+        entity=in_force.entity,
+        domain=in_force.domain,
+        status=UNKNOWN if outcome == "EXPIRE" else in_force.status,
+        evidence=evidence,
+        agent_id=SWEEPER_ID,
+        now=now,
+        client=client,
+        scope=in_force.scope,
+        agent_version=SWEEPER_VERSION,
+        standing="GOOD",
+    )
+
+
 async def _finish(
     verdict: _Verdict,
     *,
@@ -492,8 +643,14 @@ async def _finish(
     now: datetime,
     client: Any | None,
     scope: BeliefScope = "ENTITY",
+    # Item 29's two overrides, and the only reason they exist: every other caller identifies
+    # itself by a registry record, and `expire()` has none to read. Defaulted so the two doors
+    # that came before it are unchanged — `agent_version` off the record, standing off the
+    # record or SUSPENDED where the registry could not be read at all.
+    agent_version: str | None = None,
+    standing: Standing | None = None,
 ) -> BeliefCommit:
-    """§2.2 stage 6, shared by both doors: the counter, the signature and the one span."""
+    """§2.2 stage 6, shared by all three doors: the counter, the signature and the one span."""
     # The half that is not the span: a rejection whose cause is the agent's own
     # evidence increments its standing counter, and the third inside §3.4's window degrades it.
     if verdict.agent is not None and verdict.reason in COUNTED_REJECTIONS:
@@ -507,8 +664,9 @@ async def _finish(
 
     with telemetry.belief_commit(
         agent_id=agent_id,
-        agent_version="unknown" if verdict.agent is None else verdict.agent.version,
-        standing=_standing(verdict.agent),
+        agent_version=agent_version
+        or ("unknown" if verdict.agent is None else verdict.agent.version),
+        standing=standing or _standing(verdict.agent),
         belief_id=belief_id,
         belief_version=verdict.version,
         scope=scope,

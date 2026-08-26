@@ -391,7 +391,11 @@
       `<div class="head">` +
       f("belief", b.belief_id) + f("entity", b.entity) + f("domain", b.domain) +
       f("scope", b.scope) +
-      f("status", inForce.status, "verdict " + (inForce.status === "RETRACTED" ? "err" : "ok")) +
+      // UNKNOWN reads red beside RETRACTED (item 29): §6.5's swept belief has stopped
+      // informing hypotheses exactly as a disproven one has, and the red "Nd ago" the
+      // expiry row already renders is the reason, sitting two lines below it.
+      f("status", inForce.status,
+        "verdict " + (["RETRACTED", "UNKNOWN"].includes(inForce.status) ? "err" : "ok")) +
       f("version", `${inForce.version} of ${versions.length}`) +
       `</div>`;
 

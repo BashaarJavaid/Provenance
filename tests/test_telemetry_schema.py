@@ -237,6 +237,64 @@ def test_belief_commit_shape(spans: InMemorySpanExporter) -> None:
     }
 
 
+def test_the_sweeper_expiry_shares_the_shape_and_adds_nothing(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 29's fourth outcome. A word in the vocabulary, not a fifth shape and not an error.
+
+    §6.5's downgrade is the same §2.2 stage 6 as the other three — a status written, signed and
+    reported — so it earns a word rather than a span. What it must not do is quietly widen the
+    shape: an expiry carries the same attribute set as a commit, and the trace UI does not paint
+    it red, because a belief reaching its own expiry date is the system working.
+    """
+    with telemetry.belief_commit(
+        agent_id="staleness-sweeper",
+        agent_version="v1",
+        standing="GOOD",
+        belief_id="belief-42",
+        belief_version=43,
+        scope="ENTITY",
+        domain="supply_chain",
+        entity="SUP-042",
+        status="UNKNOWN",
+        confidence=0.31,
+        threshold=0.70,
+        evidence_ids=["ev-118", "ev-140"],
+        source_classes=["verified_system_observation", "third_party_audit"],
+        novel_count=0,
+        supersedes=42,
+    ) as rec:
+        rec.set_outcome(outcome="EXPIRE", reason="EXPIRED", signature="ecdsa:z")
+    span = _only(spans)
+    assert span.attributes["provenance.decision.outcome"] == "EXPIRE"
+    assert span.status.status_code is not StatusCode.ERROR
+
+
+def test_an_outcome_the_belief_vocabulary_does_not_admit_raises() -> None:
+    with pytest.raises(ValueError, match="SWEPT"):
+        _emit_belief_outcome("SWEPT")
+
+
+def _emit_belief_outcome(outcome: str) -> None:
+    with telemetry.belief_commit(
+        agent_id="staleness-sweeper",
+        agent_version="v1",
+        standing="GOOD",
+        belief_id="belief-42",
+        belief_version=43,
+        scope="ENTITY",
+        domain="supply_chain",
+        entity="SUP-042",
+        status="UNKNOWN",
+        confidence=0.31,
+        threshold=0.70,
+        evidence_ids=[],
+        source_classes=[],
+        novel_count=0,
+    ) as rec:
+        rec.set_outcome(outcome=outcome, reason="EXPIRED", signature="ecdsa:z")  # type: ignore[arg-type]
+
+
 def test_verification_outcome_shape(spans: InMemorySpanExporter) -> None:
     _emit_verification()
     span = _only(spans)

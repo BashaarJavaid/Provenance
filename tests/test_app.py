@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from test_registry import FakeFirestore
 
 from provenance import app as app_module
-from provenance import beliefs, incident, policy, registry, telemetry
+from provenance import beliefs, incident, policy, registry, sweeper, telemetry
 from provenance.app import app
 
 
@@ -34,6 +34,30 @@ def test_health_reports_the_service_and_its_tracing_state() -> None:
     assert body["version"]
     # No GOOGLE_CLOUD_PROJECT in CI: emitting stays safe, export is off.
     assert body["tracing"] is False
+
+
+def test_the_lifespan_runs_the_sweeper_and_stops_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Item 29's loop is §5.11's async process, so it has to actually start — and stop.
+
+    A task left running past shutdown is a Cloud Run instance still reading Firestore while
+    the service is being torn down. What the lifespan owns is exactly these two moments; the
+    ticking itself is `tests/test_sweeper.py`.
+    """
+    state: list[str] = []
+
+    async def forever() -> None:
+        state.append("started")
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            state.append("cancelled")
+            raise
+
+    monkeypatch.setattr(sweeper, "run_forever", forever)
+    with TestClient(app) as client:
+        client.get("/health")
+        assert state == ["started"]
+    assert state == ["started", "cancelled"]
 
 
 def test_root_serves_the_shell_with_all_six_surfaces() -> None:

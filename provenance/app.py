@@ -31,6 +31,11 @@ structurally cannot serve it. It is unauthenticated for the same reason `/trace`
 spends nothing. `docs/adr/ADR-021` records the departure; `THREAT_MODEL.md` records what it
 publishes.
 
+There is no route for the Staleness Sweeper (item 29) and that is deliberate. §5.11 asks for a
+long-running process, so it is one — an `asyncio` task started by the lifespan below — and a
+`POST /sweep` would have made it a cron with a public surface to guard. What drives a sweep on
+demand, for a script or a demo beat, is `sweeper.sweep()` called directly.
+
 `GET /registry` arrived with item 28 and is the second Firestore reader, for the same reason
 the first one exists: §8.2's registry panel renders standing and the `rejection_window` that
 earned it, and both are stored state rather than anything the span buffer can be trusted to
@@ -56,7 +61,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from provenance import beliefs, incident, policy, registry, telemetry
+from provenance import beliefs, incident, policy, registry, sweeper, telemetry
 from provenance.telemetry import TriggerSignal
 
 TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
@@ -72,9 +77,20 @@ _tracing = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Tracing, and item 29's Sweeper — the one thing here that runs when nobody asked it to."""
     global _tracing
     _tracing = telemetry.configure_tracing()
-    yield
+    # §5.11's long-running async process, and one of the two the track's runtime requirement
+    # asks for. It lives here rather than in its own service because ADR-008 put everything in
+    # one, and it lives in the lifespan rather than a scheduler because a cron is not the thing
+    # §5.11 describes. What it costs is stated rather than hidden: the service is deployed at
+    # `--min-instances=0`, so the loop consumes expiry while an instance is warm and not on a
+    # calendar. `docs/adr/ADR-031` §3.
+    task = asyncio.create_task(sweeper.run_forever())
+    try:
+        yield
+    finally:
+        await sweeper.cancel(task)
 
 
 app = FastAPI(title="Provenance", version=_VERSION, lifespan=lifespan)
