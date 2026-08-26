@@ -10,8 +10,9 @@ tests exercise `/trace` at all.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
-from dataclasses import replace
+import json
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -579,6 +580,188 @@ def test_the_approval_queue_is_readable_without_a_token(queue: FakeFirestore) ->
     # Item 31's card renders from this, and §8.1 keeps the content it needs off spans.
     assert record["proposal"]["action_class"] == "ROLLBACK_CONFIG"
     assert record["entity_ids"] == ["belief-inventory-api"]
+
+
+# --- the approval card, item 31 ------------------------------------------------------------
+#
+# The two derived keys `GET /approvals` grew so §8.2's card has something to render. Both are
+# computed per request rather than stored, because a park is exactly the window in which
+# standing moves (`docs/adr/ADR-033`), so what these assert is that the route agrees with what
+# `gateway.resolve()` would decide *now* -- not with what was true when the record parked.
+
+A_VALID_PROPOSAL: dict[str, Any] = {
+    "action_class": "ROLLBACK_CONFIG",
+    "target": "inventory-api",
+    "target_tier": "tier2",
+    "blast_radius": "single-service",
+    "reversible": True,
+    "evidence_refs": ["ev-118"],
+    "success_predicate": "error_rate < 0.05 within 10m",
+    "proposed_by": "remediation-planner@v3",
+}
+A_DANGEROUS_PROPOSAL: dict[str, Any] = {
+    "action_class": "DISABLE_COMPLIANCE_CHECKS",
+    "target": "SUP-042",
+    "target_tier": "tier1",
+    "blast_radius": "org-wide",
+    "reversible": False,
+    "evidence_refs": ["ev-901"],
+    "success_predicate": "compliance_checks_disabled == true",
+    "proposed_by": "remediation-planner@v3",
+}
+
+
+def _parked(proposal: dict[str, Any], routed_to: str) -> approvals.Approval:
+    return replace(A_PARKED, proposal=proposal, routed_to=routed_to)
+
+
+@pytest.fixture
+def carded(monkeypatch: pytest.MonkeyPatch, agents: FakeFirestore) -> Callable[..., dict[str, Any]]:
+    """Park one record and read the card the route serves for it.
+
+    Takes the `agents` fixture whole, so standing is whatever the registry stores -- which is
+    the point: `supply-chain-agent` is DEGRADED there and the others are GOOD.
+    """
+
+    def park(proposal: dict[str, Any], routed_to: str) -> dict[str, Any]:
+        record = _parked(proposal, routed_to)
+        fake = FakeFirestore({}, approvals={record.id: approvals.to_document(record)})
+        monkeypatch.setattr(approvals, "_default_client", lambda: fake)
+        with TestClient(app) as client:
+            response = client.get("/approvals")
+        assert response.status_code == 200
+        [card] = response.json()
+        return card
+
+    return park
+
+
+def test_the_card_gets_the_risk_table_computed_by_the_one_thing_that_computes_it(
+    carded: Callable[..., dict[str, Any]],
+) -> None:
+    """§4.2's worked example, served component by component: `4 + 2 + 2 + 3 = 11`.
+
+    The card cannot recompute this in the browser without becoming a second implementation of
+    the risk table that can silently disagree with the one that actually decided -- ADR-021's
+    reason for `policy.contributions()`, applied to a sum instead of a product. So the route
+    calls `risk.score()`, and the components-must-sum rule `telemetry.set_risk()` enforces at
+    emit is asserted here on the read side.
+    """
+    card = carded(A_DANGEROUS_PROPOSAL, "supply-chain-agent")
+    risk_ = card["risk"]
+    assert (risk_["base"], risk_["criticality"], risk_["blast"], risk_["irreversibility"]) == (
+        4,
+        2,
+        2,
+        3,
+    )
+    assert risk_["score"] == 11
+    assert risk_["base"] + risk_["criticality"] + risk_["blast"] + risk_["irreversibility"] == 11
+
+
+def test_a_degraded_proposer_is_why_the_card_says_held_despite_scoring_two(
+    carded: Callable[..., dict[str, Any]],
+) -> None:
+    """The sentence this surface exists to print, and it is not derivable from the score.
+
+    `gateway` checks standing *before* the risk table, so `1 + 1 + 0 + 0 = 2` -- comfortably
+    inside §4.2's auto-approve band -- is held on *who asked*. A card that inferred the reason
+    from the number would say "7 or higher" over a 2, which is the one thing a non-engineer
+    reading it would be right to disbelieve.
+
+    The record is routed to a **GOOD** agent on purpose. Standing belongs to whoever the
+    decision subject names, and that is the proposer -- see the test below, which is the live
+    finding this one was rewritten around.
+    """
+    card = carded(
+        {**A_VALID_PROPOSAL, "proposed_by": "supply-chain-agent@v1"}, "remediation-planner"
+    )
+    assert card["risk"]["score"] == 2
+    assert card["hold_reason"] == "STANDING_DEGRADED"
+
+
+def test_the_standing_read_is_the_proposers_and_not_the_agent_it_was_routed_to(
+    carded: Callable[..., dict[str, Any]],
+) -> None:
+    """Item 31's live finding: `routed_to` and the decision subject are routinely different.
+
+    The domain agent reasons about the incident; the Planner proposes the action. `SUP-042`'s
+    park is routed to `supply-chain-agent` and its subject is `remediation-planner@v3`, so a
+    card deriving standing from `routed_to` reports a different agent's trustworthiness than
+    the one the gateway will check at resume -- and gets item 28's beat exactly backwards,
+    printing "7 or higher" over a score of 2.
+
+    Both directions are asserted from one fixture, because either alone passes on a fleet
+    where the two agents happen to agree.
+    """
+    degraded_proposer = carded(
+        {**A_VALID_PROPOSAL, "proposed_by": "supply-chain-agent@v1"}, "remediation-planner"
+    )
+    good_proposer = carded(A_VALID_PROPOSAL, "supply-chain-agent")
+    assert degraded_proposer["hold_reason"] == "STANDING_DEGRADED"
+    assert good_proposer["hold_reason"] == "RISK_THRESHOLD"
+
+
+def test_a_good_agent_over_the_threshold_is_held_by_the_score(
+    carded: Callable[..., dict[str, Any]],
+) -> None:
+    card = carded(A_DANGEROUS_PROPOSAL, "sre-infra-agent")
+    assert (card["risk"]["score"], card["hold_reason"]) == (11, "RISK_THRESHOLD")
+
+
+def test_a_proposal_that_no_longer_validates_is_not_scored_rather_than_a_crash(
+    carded: Callable[..., dict[str, Any]],
+) -> None:
+    """Item 30's live finding on the read side: a lie about a tier is `SCHEMA_INVALID`.
+
+    §3.1 checks the three risk-table inputs against an authority that is not the proposal, so
+    a tampered record never reaches §4.2 at all. The card has to render that as "not scored"
+    -- the shape the ledger panel already uses for a decision denied before the risk table --
+    rather than the route falling over and taking the whole queue with it.
+    """
+    card = carded({**A_VALID_PROPOSAL, "target_tier": "tier3"}, "remediation-planner")
+    assert card["risk"] is None
+    assert card["hold_reason"] is None
+    # The stored half is untouched: the queue still shows what is waiting for a human.
+    assert card["id"] == A_PARKED.id
+    assert card["state"] == "PARKED"
+
+
+def test_the_two_derived_keys_are_added_beside_the_record_and_replace_nothing(
+    carded: Callable[..., dict[str, Any]],
+) -> None:
+    """`approver`'s discipline on the ledger, applied here: additive, so old readers still parse.
+
+    `scripts/verify_approval_queue.py`, the README's curl and item 30's own tests all read this
+    route. Nesting the record under a key would have broken every one of them for a layout
+    preference.
+    """
+    card = carded(A_VALID_PROPOSAL, "remediation-planner")
+    # Through JSON, because the record's tuples arrive as lists and the claim is about the
+    # wire shape a reader parses, not about the dataclass behind it.
+    stored = json.loads(json.dumps(asdict(_parked(A_VALID_PROPOSAL, "remediation-planner"))))
+    assert set(card) - set(stored) == {"risk", "hold_reason"}
+    assert {key: card[key] for key in stored} == stored
+
+
+def test_an_unreadable_registry_is_a_503_and_not_a_card_that_cannot_say_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§7.3 on the queue's second dependency, for `/registry`'s reason one surface over.
+
+    A card that renders a hold and cannot say what held it is the one wrong answer this
+    surface can give -- it asks a non-engineer to approve something on no stated grounds.
+    """
+    record = _parked(A_VALID_PROPOSAL, "remediation-planner")
+    fake = FakeFirestore({}, approvals={record.id: approvals.to_document(record)})
+    monkeypatch.setattr(approvals, "_default_client", lambda: fake)
+
+    async def unreadable(*args: object, **kwargs: object) -> registry.Agent:
+        raise registry.RegistryUnavailable("firestore unreachable")
+
+    monkeypatch.setattr(registry, "get_agent", unreadable)
+    with TestClient(app) as client:
+        assert client.get("/approvals").status_code == 503
 
 
 def test_an_unreadable_queue_is_a_503_rather_than_an_empty_one(

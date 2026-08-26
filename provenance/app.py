@@ -33,7 +33,7 @@ publishes.
 
 `GET /approvals` and `POST /approvals/{id}` arrived with item 30 and are the **first route
 pair here that writes**, which ADR-008 and ADR-015 both named as the honest test of "no
-framework yet". The read is unauthenticated for the reason the other three reads are -- item
+framework yet" -- answered at item 31, and the answer was still no (`docs/adr/ADR-033`). The read is unauthenticated for the reason the other three reads are -- item
 36's cold judge has to be able to see what the fleet is holding without a token. The write
 reuses `/trigger`'s guard and its secret rather than introducing a second: a resume runs the
 Verification Agent, so it spends model tokens against the same fixed credit, which is the
@@ -72,7 +72,17 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from provenance import approvals, beliefs, incident, policy, registry, sweeper, telemetry
+from provenance import (
+    action,
+    approvals,
+    beliefs,
+    incident,
+    policy,
+    registry,
+    risk,
+    sweeper,
+    telemetry,
+)
 from provenance.telemetry import TriggerSignal
 
 TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
@@ -207,6 +217,41 @@ async def agents() -> list[dict[str, Any]]:
     ]
 
 
+# §2.1's two hold reasons, keyed by the standing that produces each. `SUSPENDED` is absent on
+# purpose rather than mapped to a third string: a suspended agent's parked action is not held
+# any more, it is refused, and `.get()` returning `None` is the card being told so. Item 28's
+# `_LEARNS_FROM` shape -- the rule is the dict, not a branch.
+_HOLD_REASON = {"GOOD": "RISK_THRESHOLD", "DEGRADED": "STANDING_DEGRADED"}
+
+
+async def _derived(record: approvals.Approval) -> dict[str, Any]:
+    """§4.2 recomputed and §2.1's hold reason re-derived, in `gateway._re_decide()`'s order.
+
+    Neither is stored on the park (`ADR-032` reason 3 keeps the record an *input*, since
+    `_signing_key()` is per process), and neither could honestly be: a park is exactly the
+    window in which standing moves, so a stored reason would be a stale one. The card is
+    therefore told what a resume would decide *now*.
+
+    `action.validate()` consults its authority in process, so the only cost here is the one
+    registry read -- at request time and cached nowhere, §1.1 property 4.
+    """
+    try:
+        validated = action.validate(record.proposal)
+        # The *proposing* agent, not `routed_to`. They are routinely different -- the domain
+        # agent reasons, the Planner proposes -- and standing is checked against whoever the
+        # decision subject names, which is what `gateway._re_decide()` reads. Getting this
+        # from `routed_to` reports the wrong agent's standing on exactly item 28's beat: a
+        # DEGRADED Planner's score-2 rollback would render as `RISK_THRESHOLD` over a 2.
+        agent = await registry.get_agent(validated.proposed_by.split("@")[0])
+    # A proposal that no longer validates never reaches the risk table (item 30's live
+    # finding: understating a tier is `SCHEMA_INVALID`, not a lower score), and an agent that
+    # is gone cannot have its standing read. Both render as "not scored", which is the shape
+    # the ledger panel already uses for a decision denied before §4.2.
+    except (action.ActionError, registry.AgentNotRegistered):
+        return {"risk": None, "hold_reason": None}
+    return {"risk": asdict(risk.score(validated)), "hold_reason": _HOLD_REASON.get(agent.standing)}
+
+
 @app.get("/approvals")
 async def approval_queue() -> list[dict[str, Any]]:
     """§2.1 stage 7's queue, read side (item 30). Unauthenticated, like the other three reads.
@@ -215,15 +260,25 @@ async def approval_queue() -> list[dict[str, Any]]:
     included -- because item 31's approval card renders from this and §8.1 keeps the content
     it needs off spans, exactly as `/belief` does. Nothing here is a secret: it is a
     description of an action the fleet has *not* taken and may not take without an answer.
+
+    **Item 31 widened it by two derived keys**, `risk` and `hold_reason`, added beside the
+    stored fields rather than nesting them, so every reader written before this one still
+    parses -- the discipline `approver` took on the ledger. The card needs the §4.2 arithmetic
+    component by component and the sentence "held *despite* scoring 2"; the record carries
+    neither, the span stream cannot carry them across the restart the park exists to survive,
+    and a browser recomputing the risk table would be a second implementation of it. So the
+    route computes both, from the one implementation of each (`docs/adr/ADR-033`).
     """
     try:
         parked = await approvals.pending()
+        return [asdict(record) | await _derived(record) for record in parked]
     # §7.3, and `/registry`'s reasoning applied to the queue: "the queue was unreadable" and
     # "there is nothing waiting" must not look alike. An empty panel during an outage would
-    # tell a human that nothing needs them.
-    except approvals.ApprovalError as exc:
+    # tell a human that nothing needs them. A registry outage fails the same way and for the
+    # same reason: a card that renders a hold without saying why it is held is the one wrong
+    # answer this surface can give.
+    except (approvals.ApprovalError, registry.RegistryError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return [asdict(record) for record in parked]
 
 
 class ApprovalRequest(BaseModel):

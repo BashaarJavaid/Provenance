@@ -213,8 +213,16 @@ scores 7 or higher, or one proposed by a `DEGRADED` agent, is **held**: nothing 
 the incident parks in a queue that outlives the process holding it. See what is waiting, then
 answer it:
 
-A held incident's `/trigger` response carries the `approval_id` to answer, and `GET /approvals`
-lists everything waiting:
+**The approval card is the surface for this** — open the service root in a browser and the
+*Approval card* panel shows every held action in plain language: what the fleet wants to do,
+why, and the risk score component by component with the reason it stopped. Approve or deny it
+there; the token is the one already in the trigger strip above it. Nothing on the card is
+written by a model — the arithmetic comes from the §4.2 lookup table
+(`docs/adr/ADR-033-the-approval-card.md`).
+
+The same thing over HTTP, for a terminal: a held incident's `/trigger` response carries the
+`approval_id` to answer, and `GET /approvals` lists everything waiting (with the risk breakdown
+and the hold reason on each record):
 
 ```bash
 curl https://provenance-808273007560.us-central1.run.app/approvals            # open, no token
