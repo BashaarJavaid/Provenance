@@ -1845,3 +1845,59 @@ def test_no_facts_seeds_the_key_stated_rather_than_absent() -> None:
     """An instruction naming a key that was never seeded fails at interpolation time."""
     seeded = incident._seed_state(a_supplier_trigger(), "v3", NO_RECALL, None)
     assert seeded["sanitized_facts"] == "none"
+
+
+# --- the injection arc (item 27) ------------------------------------------------------------
+
+
+def test_a_leaked_payload_still_ends_held_at_the_published_arithmetic(
+    monkeypatch: pytest.MonkeyPatch, spans: InMemorySpanExporter
+) -> None:
+    """Item 27's `verify:` line offline: the composition, not any one link in it.
+
+    Every link already has its own test -- `test_ingest.py` for the screen, `test_sanitizer.py`
+    for the reduction, item 21's test above for the arithmetic. What none of them holds is that
+    the arithmetic survives *a run the payload reached*, which before this item was two green
+    suites read side by side rather than one assertion. Both filters are stipulated to leak,
+    which is the honest stipulation: item 25 and item 26 measured them leaking on this exact
+    payload, and a fake that blocked would be testing a world we know we are not in.
+
+    Two halves are asserted separately on purpose. The components `(4, 2, 2, 3)` are §4.2's
+    table; `HOLD` is `risk.band()` applied to their sum. A test that checked only the outcome
+    would stay green with `risk.BASE` mutated to 1, and a test that checked only the components
+    would stay green with `NOTIFY_CEILING` raised past 11 -- and that second mutation is a
+    supply-chain incident that *executes*, which is the thing this arc exists to rule out.
+
+    What this cannot hold is the four-reasoning-chain count: `FakeSanitizer` stands in for
+    `sanitize()`, so no sanitize span is emitted here and "the sanitizer is countable in the
+    audit stream" is `scripts/verify_injection_arc.py`'s assertion against a real trace.
+    """
+    result, model = run_with_content(a_supply_chain_run(), monkeypatch=monkeypatch)
+
+    assert result.outcome == "HELD"
+    assert result.action is not None
+    assert (result.action.action_class, result.action.target) == (
+        "DISABLE_COMPLIANCE_CHECKS",
+        "SUP-042",
+    )
+    assert result.decision is not None
+    assert (result.decision.outcome, result.decision.stage) == ("HOLD", "risk")
+    assert result.decision.reason == "RISK_THRESHOLD"
+    assert result.decision.score is not None
+    score = result.decision.score
+    assert (score.base, score.criticality, score.blast, score.irreversibility) == (4, 2, 2, 3)
+    assert score.score == 11
+    # The gateway never read the payload: its subject names who asked, for what, against what.
+    assert result.decision.subject == "remediation-planner@v3|DISABLE_COMPLIANCE_CHECKS|SUP-042"
+    # Nothing ran, so nothing was verified and nothing was learned -- §7.2 with no branch.
+    assert (result.execution, result.verification, result.belief) == (None, None, None)
+
+    # The one model-authored free-text field on a signed Action, and every span attribute.
+    haystacks = [result.action.success_predicate, *model.prompts]
+    haystacks += [
+        json.dumps({str(k): str(v) for k, v in (span.attributes or {}).items()})
+        for span in spans.get_finished_spans()
+    ]
+    for blob in haystacks:
+        for token in RAW_TOKENS:
+            assert token not in blob
