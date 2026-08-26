@@ -8,13 +8,12 @@ is the live proof.
 
 Three things about this module are worth knowing before changing it.
 
-**Nothing calls `screen()` yet, and that is the honest state.** Item 25's title says "wired on
-all ingest", but there is no untrusted free-text ingest in this repo: `incident.Trigger` is a
-validated entity id, a `Literal` signal, a float and a timestamp, and every string reaching a
-prompt comes from the frozen entity model or from our own agents. The untrusted-content path
-arrives with item 26's sanitizer and its consumer with item 27's arc. A `raw_content` field
-nothing reads is the speculative shape `CLAUDE.md` §2 forbids, so the mechanism is built and
-proven and the wiring waits for a caller. `docs/adr/ADR-027` records that.
+**Item 26 gave `screen()` its caller** — the paragraph that stood here said nothing did, which
+was the honest state while `incident.Trigger` carried no untrusted free text. It now carries
+`raw_content`, and `incident.run_incident()` screens it before the incident span opens and
+raises `ContentBlocked` on a match: ingest halting means no incident exists, which is §7.3's
+row read literally. `docs/adr/ADR-027` records why the wiring waited; `ADR-028` records the
+sanitizer that arrived with it.
 
 **It fails closed (§7.3, "Model Armor or sanitizer unavailable → ingest halts").** Any API
 failure raises `ScreeningUnavailable`; nothing returns a permissive verdict, and "the filter
@@ -68,6 +67,23 @@ class ScreeningUnavailable(Exception):
     side: a caller that cannot tell an outage from a clean pass would let untrusted content
     through precisely when the filter is down.
     """
+
+
+class ContentBlocked(Exception):
+    """Model Armor matched, so this content does not travel any further (§7.3).
+
+    Item 26 gave `screen()` its first caller and this its first raiser. Distinct from
+    `ScreeningUnavailable` above in exactly the way that one is distinct from a clean pass:
+    the filter working and the filter being unreachable are different facts, and a caller that
+    could not tell them apart would report an outage as a defence.
+
+    Carries the filter names off the `Verdict`, never the text — the same line the `Verdict`
+    itself holds.
+    """
+
+    def __init__(self, filters_matched: tuple[str, ...]) -> None:
+        super().__init__(f"Model Armor matched {list(filters_matched)}; ingest halts")
+        self.filters_matched = filters_matched
 
 
 @dataclass(frozen=True)

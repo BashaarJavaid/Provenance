@@ -71,7 +71,7 @@ Further conventions:
 - `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` is token-guarded and **fails closed when `PROVENANCE_TRIGGER_TOKEN` is unset** — don't remove the guard. `GET /trace` and `GET /belief/{entity}` are unauthenticated on purpose.
 - Deploy at `--max-instances=1` (the trace UI's span buffer is in-process) and `--min-instances=0`. Don't raise either for convenience.
 - No entity document carries a `status` / `confidence` / `belief` field — `SUP-042` is AT_RISK through the belief store, never as a seeded field. `inventory-api` is tier2 and `SUP-042` is tier1 (the only route to the frozen scores 2 and 11); `pricing-api` has no config history on purpose.
-- Reasoning roles run on `gemini-2.5-pro`; verification on `gemini-3.5-flash`. Gemini 3.5 Pro is not served to this project. Gemini 3.x lives on the **`global`** endpoint.
+- Reasoning roles run on `gemini-2.5-pro`; verification on `gemini-3.5-flash`; the item-26 sanitizer on `gemma-4-26b-a4b-it-maas`. Gemini 3.5 Pro is not served to this project. Gemini 3.x lives on the **`global`** endpoint.
 - Don't lower Model Armor from `HIGH` if the crafted payload starts matching — re-script item 27 instead.
 
 ## Commands
@@ -115,6 +115,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_class_belief.py` — item 23
 - `scripts/verify_incident_three.py` — item 24; `--runs N`
 - `scripts/verify_model_armor.py` — item 25; mutates nothing
+- `scripts/verify_sanitizer.py` — item 26; mutates nothing
 
 Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 
@@ -123,14 +124,14 @@ Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 The GCP project runs on a **$300 free-trial credit and must not exceed it**, and the hosted demo has to stay alive through **October 1** judging. Trial credit also expires ~90 days after activation, so unspent credit is not banked. Treat the ceiling as a design constraint, not something to audit afterwards — billing data lags up to a day, so by the time a number looks wrong the money is already gone.
 
 - **Before adding any paid resource** — a deployed model endpoint, a Cloud Run service with `min-instances > 0`, a scheduled job, anything with a GPU — state what it costs per hour and whether it bills **while idle**. Idle-billing resources are the only things that can realistically drain the credit.
-- **The single largest risk is the Gemma 4 sanitizer** (`docs/adr/ADR-006`, Phase 8). A dedicated Vertex endpoint bills by the hour whether or not it serves a request — order $1–4/hr, which is the entire credit in under two weeks of being left up. Deploy it only while that beat is being built or recorded, and undeploy immediately after. Never leave it running overnight.
+- **The Gemma 4 sanitizer was the single largest risk, and item 26 removed it rather than managing it.** A dedicated Vertex endpoint bills by the hour whether or not it serves a request — order $1–4/hr, the entire credit in under two weeks. `gemma-4-26b-a4b-it-maas` is served **as a service** and bills per token, so there is nothing to deploy, nothing to undeploy and nothing that can be left running overnight (`docs/adr/ADR-028` §1). **The rule the old one stood for still holds:** if a future beat needs a dedicated endpoint, it is deployed only while being built or recorded, and undeployed immediately after.
 - **Cloud Run stays `min-instances=0`** with a low `max-instances`. Scale-to-zero is the default posture; an always-warm instance is a deliberate, justified exception, not a convenience.
 - **Token spend is not the risk; loops are.** A Gemini call costs cents; an agent looping on one costs whatever it can reach. The bounded retry (Phase 5, item 20) and the escalation path are cost controls as much as correctness ones.
 - **The backstop is a budget, not a habit.** `scripts/set_budget.sh` configures a $300 Cloud Billing budget with alerts at 50/90/100%. Alerts notify, they do not stop spend — the four rules above are the actual guardrail.
 
 ## Current phase
 
-Phases 1–7 done; Phase 8 open. Items 0.5–25 shipped (Aug 25). **Item 26 (the Gemma 4 sanitizer) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–7 done; Phase 8 under way. Items 0.5–26 shipped (Aug 25). **Item 27 (the injection arc) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
 
@@ -139,7 +140,8 @@ Live traps (would strand the fleet or the demo):
 - `remediation-planner` is at **`v3`**. Read `agent.version` off the record, never hardcode it. Private keys are printed once by `--rotate` and stored nowhere — `PROVENANCE_PLANNER_KEY` is the env var.
 - `scripts/verify_belief_store.py` refuses unless `sre-infra-agent` starts `GOOD` with an empty rejection window. Clearing that window is a human act; the script's teardown writes `rejection_window: []`.
 - `scripts/verify_refuted.py` imports its teardown from `verify_incident_one.py` — two restore paths over one fixture drift. Don't duplicate it.
-- Gemma 4 (item 26) bills **while idle**. Deploy only while building or recording; undeploy after. Never overnight.
+- The sanitizer runs on **`gemma-4-26b-a4b-it-maas`**, served **only** from the `global` endpoint, and it `429`s on roughly half of all calls — that is `PUBLIC_PREVIEW` shared capacity, not a defect. `sanitizer.SANITIZE_ATTEMPTS` is the answer; re-run rather than raising it. Nothing is deployed and nothing bills while idle, so there is no undeploy step (this replaces the old "Gemma bills while idle" trap — `ADR-028` §1 records why it is gone).
+- The sanitizer's `PLACEHOLDER` check is not tidiness: Gemma has been observed listing the PII it replaced in `pii_tokens`. A token that is not a placeholder **is** PII. Don't relax it to a prompt instruction.
 
 ---
 
