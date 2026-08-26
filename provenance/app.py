@@ -312,6 +312,10 @@ async def trigger(
     return {
         "incident_id": result.incident_id,
         "outcome": result.outcome,
+        # Item 30: null unless the incident was held. A caller that gets `HELD` has the id it
+        # needs to answer, rather than having to search `GET /approvals` for its own incident --
+        # which is the difference between a documented flow and a scavenger hunt (item 36).
+        "approval_id": result.approval_id,
         "malformed_attempts": result.malformed_attempts,
         "refuted_attempts": result.refuted_attempts,
         "action": None if result.action is None else asdict(result.action),

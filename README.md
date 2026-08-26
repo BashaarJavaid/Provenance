@@ -213,6 +213,9 @@ scores 7 or higher, or one proposed by a `DEGRADED` agent, is **held**: nothing 
 the incident parks in a queue that outlives the process holding it. See what is waiting, then
 answer it:
 
+A held incident's `/trigger` response carries the `approval_id` to answer, and `GET /approvals`
+lists everything waiting:
+
 ```bash
 curl https://provenance-808273007560.us-central1.run.app/approvals            # open, no token
 curl -X POST https://provenance-808273007560.us-central1.run.app/approvals/appr-... \

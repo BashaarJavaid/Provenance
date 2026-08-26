@@ -520,6 +520,50 @@ def queue(monkeypatch: pytest.MonkeyPatch) -> FakeFirestore:
     return fake
 
 
+def test_a_held_trigger_hands_back_the_id_needed_to_answer_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 36's flow: trigger, get HELD, answer it — without searching the queue for yourself."""
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+
+    async def held(*args: object, **kwargs: object) -> incident.IncidentResult:
+        return incident.IncidentResult(
+            incident_id="inc-abc123",
+            outcome="HELD",
+            decision=None,
+            action=None,
+            malformed_attempts=0,
+            approval_id="appr-3f2b1c",
+        )
+
+    monkeypatch.setattr(app_module.incident, "run_incident", held)
+    with TestClient(app) as client:
+        body = client.post(
+            "/trigger", json=A_TRIGGER, headers={"X-Provenance-Token": "s3cret"}
+        ).json()
+    assert (body["outcome"], body["approval_id"]) == ("HELD", "appr-3f2b1c")
+
+
+def test_an_unheld_trigger_reports_no_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+
+    async def resolved(*args: object, **kwargs: object) -> incident.IncidentResult:
+        return incident.IncidentResult(
+            incident_id="inc-abc123",
+            outcome="RESOLVED",
+            decision=None,
+            action=None,
+            malformed_attempts=0,
+        )
+
+    monkeypatch.setattr(app_module.incident, "run_incident", resolved)
+    with TestClient(app) as client:
+        body = client.post(
+            "/trigger", json=A_TRIGGER, headers={"X-Provenance-Token": "s3cret"}
+        ).json()
+    assert body["approval_id"] is None
+
+
 def test_the_approval_queue_is_readable_without_a_token(queue: FakeFirestore) -> None:
     """Item 36's cold judge has to see what the fleet is holding before being handed a secret.
 
