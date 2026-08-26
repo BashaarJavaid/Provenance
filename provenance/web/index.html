@@ -130,6 +130,42 @@
   #belief .now { color: var(--warn); }
   #belief .stale { color: var(--bad); font-weight: 600; }
 
+  /* --- approval card (item 31) --- */
+  /* §8.2's "Unlikely Hero" surface, so this is the one region that is not monospace: the
+     reader is a store operations manager, not an engineer. Identifiers stay monospace. */
+  #approvals:empty::after {
+    content: "nothing is waiting for a human"; display: block; margin-top: 0.9rem;
+    color: var(--dim); opacity: 0.75; font: 11px/1 var(--mono);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .card {
+    margin-top: 0.9rem; padding: 0.9rem 1rem; border: 1px solid var(--line);
+    border-left: 3px solid var(--warn); border-radius: 8px; font-size: 14px;
+  }
+  .card h3 {
+    font: 11px/1 var(--mono); color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 1rem 0 0.4rem; font-weight: 400;
+  }
+  .card h3:first-child { margin-top: 0; }
+  .card p { color: var(--fg); font-size: 14px; margin: 0; max-width: 52rem; }
+  .card code, .card .id { font: 12.5px/1.5 var(--mono); color: var(--dim); }
+  /* The arithmetic, laid out so it reads as a sum -- that alignment is the whole surface.
+     Every number in it was computed by GET /approvals; this grid adds nothing up. */
+  .risk { display: grid; grid-template-columns: 2.6rem 11rem minmax(0, 1fr); gap: 0.2rem 0.7rem;
+    font: 13px/1.5 var(--mono); }
+  .risk .n { text-align: right; color: var(--fg); }
+  .risk .k { color: var(--dim); }
+  .risk .tot { display: contents; }
+  .risk .tot > * { border-top: 1px solid var(--line); padding-top: 0.4rem; font-weight: 600; }
+  .card form.inline { margin-top: 0.9rem; }
+  .card form.inline input { width: 10rem; }
+  #answered {
+    font: 13px/1.6 var(--mono); margin-top: 0.9rem; color: var(--dim);
+  }
+  #answered:empty { margin-top: 0; }
+  #answered b { color: var(--fg); }
+  #answered.bad { color: var(--bad); }
+
   footer { margin-top: 2rem; color: var(--dim); font-size: 0.8rem; }
 </style>
 
@@ -185,10 +221,13 @@
       <p>Agent standing, live, so a DEGRADED transition is visible the instant it happens.</p>
       <div class="rows registry" id="registry"></div>
     </section>
-    <section>
+    <section class="wide">
       <h2>Approval card</h2>
       <p>Every HOLD in plain language for a non-engineer — generated from the risk table, never from a model.</p>
-      <span class="pending">awaiting item 31 · phase 10</span>
+      <!-- Written only by the verdict handler. The poller never touches it, so the answer to
+           the question you just answered survives the record leaving the queue. -->
+      <div id="answered"></div>
+      <div id="approvals"></div>
     </section>
     <section>
       <h2>Counterfactual panel</h2>
@@ -484,6 +523,155 @@
     }).join("");
   }
 
+  // --- approval card (item 31) --------------------------------------------------------------
+  // §8.2's approval card: what the fleet wants to do, why, the arithmetic component by
+  // component, approve/deny. **Nothing here is computed in the browser.** Every number comes
+  // from GET /approvals, which calls risk.score() -- the one implementation of §4.2 -- and
+  // derives the hold reason from a request-time registry read (docs/adr/ADR-033). What this
+  // file supplies is English for the enum values, which is what "plain language" means when
+  // the number is not allowed to be a model's opinion.
+  const TIER = { tier1: "tier-1 — the business runs on it", tier2: "tier-2", tier3: "tier-3" };
+  const BLAST = {
+    "org-wide": "everyone, company-wide",
+    "multi-service": "several services",
+    "single-service": "one service",
+  };
+  const APPROVER = "dana.ruiz";
+
+  const proposer = a => String(a.proposal.proposed_by).split("@")[0];
+
+  function heldBecause(a) {
+    // §4.2's band and §2.1 stage 5, in the order the gateway checks them: standing first, so
+    // a DEGRADED agent's boring rollback is held on *who asked*, not on what it scored. That
+    // sentence -- "held despite scoring 2" -- is the one this surface exists to print.
+    if (a.risk === null)
+      return "this cannot be approved: the proposal no longer matches what the fleet is " +
+        "allowed to describe, so a resume would refuse it whatever you answer.";
+    if (a.hold_reason === "STANDING_DEGRADED")
+      return `held <b>despite scoring only ${a.risk.score}</b>. The registry has downgraded ` +
+        `<b>${esc(proposer(a))}</b>, and an agent the fleet has stopped trusting needs a ` +
+        `person for everything it proposes — however small.`;
+    if (a.hold_reason === "RISK_THRESHOLD")
+      return `the score reached <b>${a.risk.score}</b>, and <b>7 or higher always stops for a ` +
+        `person</b>. Nothing has happened yet, and nothing will until you answer.`;
+    return `this cannot be approved: <b>${esc(proposer(a))}</b> is suspended or no longer in ` +
+      "the registry, so a resume would refuse it whatever you answer.";
+  }
+
+  function arithmetic(a) {
+    if (a.risk === null) return '<p class="id"><em>not scored — the proposal no longer validates.</em></p>';
+    const p = a.proposal, r = a.risk;
+    const row = (n, k, why) => `<span class="n">+${n}</span><span class="k">${k}</span><span>${why}</span>`;
+    return `<div class="risk">` +
+      row(r.base, "the action itself", `<code>${esc(p.action_class)}</code>`) +
+      row(r.criticality, "what it touches", esc(TIER[p.target_tier] ?? p.target_tier)) +
+      row(r.blast, "how far it reaches", esc(BLAST[p.blast_radius] ?? p.blast_radius)) +
+      row(r.irreversibility, "can it be undone", p.reversible ? "yes — it can be rolled back" : "no — this cannot be taken back") +
+      `<div class="tot"><span class="n">${r.score}</span><span class="k">total</span>` +
+      `<span>${heldBecause(a)}</span></div></div>`;
+  }
+
+  function card(a) {
+    const p = a.proposal;
+    const rests = a.entity_ids.length
+      ? `It rests on what the organization currently believes about ` +
+        `<b>${a.entity_ids.map(esc).join("</b>, <b>")}</b>.`
+      : "It rests on no stored belief.";
+    return `<div class="card">` +
+      `<h3>What the fleet wants to do</h3>` +
+      // The proposing agent, which is not `routed_to`: the domain agent reasons and the
+      // Planner proposes. Standing, and therefore the hold reason, is about this one.
+      `<p><b>${esc(proposer(a))}</b> wants to run <code>${esc(p.action_class)}</code> on ` +
+      `<b>${esc(p.target)}</b>, after <b>${esc(a.routed_to)}</b> looked into it.</p>` +
+      `<h3>Why</h3>` +
+      `<p><b>${esc(a.trigger_target)}</b> reported <b>${esc(a.trigger_signal)}</b> at ` +
+      `<b>${esc(a.trigger_observed_value)}</b>. ${rests}</p>` +
+      // The predicate is a whole sentence the Planner declared before anything ran, so it
+      // gets a colon rather than being spliced into one -- and its own line, because this is
+      // what "did it work" will be judged against and a non-engineer should be able to read it.
+      `<p class="id">It counts as having worked when: ${esc(p.success_predicate)}</p>` +
+      `<h3>Why it stopped here</h3>` +
+      arithmetic(a) +
+      `<form class="inline" onsubmit="return false">` +
+      `<label for="f-approver-${esc(a.id)}">your name</label>` +
+      `<input id="f-approver-${esc(a.id)}" value="${esc(APPROVER)}">` +
+      `<button data-verdict="approve" data-id="${esc(a.id)}">Approve</button>` +
+      `<button data-verdict="deny" data-id="${esc(a.id)}">Deny</button>` +
+      `<span class="id">${esc(a.id)} · parked ${esc(String(a.parked_at).slice(11, 16))} · ` +
+      `answering uses the same token as the trigger above</span>` +
+      `</form></div>`;
+  }
+
+  // A repaint every 5s would wipe whatever the human is halfway through typing, so the panel
+  // only redraws when the queue actually changed. The key carries the hold reason and the
+  // score as well as the id: standing can move *during* a park, and this surface is the one
+  // that has to say so.
+  let queueKey = null, answering = false;
+
+  async function approvalCards() {
+    if (answering) return;
+    let queue;
+    try {
+      const response = await fetch("/approvals", { cache: "no-store" });
+      // A 503 is the queue -- or the registry behind it -- being unreadable, which is not the
+      // same as nothing needing a human. Leave the last cards up rather than clearing them to
+      // an empty panel that says the one wrong thing this surface can say.
+      if (!response.ok) return;
+      queue = await response.json();
+    } catch { return; }
+    const key = queue.map(a => `${a.id}/${a.hold_reason}/${a.risk && a.risk.score}`).join(",");
+    if (key === queueKey) return;
+    queueKey = key;
+    // Newest first: a queue is answered from the top, and the demo parks two.
+    el("approvals").innerHTML = queue
+      .sort((x, y) => (x.parked_at < y.parked_at ? 1 : -1))
+      .map(card)
+      .join("");
+  }
+
+  function answered(body, approver) {
+    const d = body.decision, x = body.execution;
+    const done = x
+      ? `<b>${esc(x.target)}</b> rolled ${esc(x.from_version)} → <b>${esc(x.to_version)}</b>`
+      : "<b>nothing executed</b>";
+    const learned = body.belief ? `belief <b>${esc(body.belief.belief_id)}</b> written` : "nothing learned";
+    return `<b>${esc(body.approval_id)}</b> answered by <b>${esc(approver)}</b> — ` +
+      `<b>${esc(d.outcome)}</b> · stage ${esc(d.stage)} · ${esc(d.reason)}<br>` +
+      `${done} · verification <b>${esc(body.verification ?? "none")}</b> · ${learned}<br>` +
+      `signed <span class="id">${esc(String(d.signature).slice(0, 24))}…</span> into the ledger.`;
+  }
+
+  // No optimistic update: the buttons disable, the POST is awaited, and what renders is what
+  // the gateway actually decided. That keeps client-side write state at zero, which is the
+  // evidence ADR-008's and ADR-015's "still no framework" clauses were waiting on (ADR-033).
+  el("approvals").addEventListener("click", async event => {
+    const button = event.target.closest("button[data-verdict]");
+    if (!button || answering) return;
+    const id = button.dataset.id, verdict = button.dataset.verdict, out = el("answered");
+    answering = true;
+    document.querySelectorAll("#approvals button").forEach(b => (b.disabled = true));
+    out.className = "";
+    // An approve resumes the incident to the end -- execute, verify, learn -- and the
+    // verification is a real model call, so this blocks for tens of seconds and says so.
+    out.textContent = `answering ${id}: ${verdict}. A resume runs the fleet to the end; this takes up to a minute.`;
+    try {
+      const response = await fetch(`/approvals/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Provenance-Token": el("f-token").value },
+        body: JSON.stringify({ verdict, approver: el(`f-approver-${id}`).value.trim() }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ? JSON.stringify(body.detail) : response.status);
+      out.innerHTML = answered(body, el(`f-approver-${id}`).value.trim());
+    } catch (error) {
+      out.className = "bad";
+      out.textContent = `${id} was not answered: ${error.message}`;
+    } finally {
+      answering = false;
+      queueKey = null;
+    }
+  });
+
   el("lookup").addEventListener("submit", event => {
     event.preventDefault();
     belief(el("f-entity").value.trim());
@@ -500,4 +688,8 @@
   // a day from a tab left open; the 1s cadence would be ~350k against a 50k/day free tier,
   // and the $300 ceiling is a design constraint here rather than something audited after.
   registry(); setInterval(registry, 5000);
+  // The registry tick, for the registry's reason: a hold has to appear inside one narration
+  // beat. The route does a validate, a risk.score() and one registry read per parked record,
+  // and the demo parks at most two -- so this is a handful of documents every five seconds.
+  approvalCards(); setInterval(approvalCards, 5000);
 </script>

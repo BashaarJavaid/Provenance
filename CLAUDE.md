@@ -121,6 +121,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_poisoning_arc.py` — item 28; **writes live registry state** and restores it; no model calls
 - `scripts/verify_sweeper.py` — item 29; writes three scratch beliefs and deletes them; needs the app running (or `PROVENANCE_SERVICE_URL`) for its inspector step; no model calls
 - `scripts/verify_approval_queue.py` — item 30; **writes live registry state** and restores it; default run waits a real 310s parked (`--park-seconds`); `--park-only` / `--resume <id>` run the two halves in two processes, which is the only check of "survives a restart"; teardown imported from `verify_incident_one.py`
+- `scripts/verify_approval_card.py` — item 31; HTTP only, no cloud credentials of its own, no token, mutates nothing; **refuses on an empty queue** — park one first, and answer or delete it afterwards
 
 Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 
@@ -136,9 +137,19 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–9 done and Phase 10 half done. Items 0.5–30 shipped (Aug 26). **Item 31 (the plain-language approval card) is next**, and it is the surface half of the item just shipped: item 30 built the queue as two routes and left `provenance/web/index.html` untouched. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–10 built. Items 0.5–30 shipped; **item 31 is deployed (`provenance-00021-sqk`) and verified live end to end** (Aug 26) — denied from the browser, and the DEGRADED score-2 half parked and resumed across two processes with all state restored. Outstanding: a non-engineer actually reading the card, which is the one claim no script can make. See item 31's done-note. **Item 32 (the `--memory-disabled` A/B counterfactual) is next** — the last build item before the Phase 12 bonus artifacts. Five of §8.2's six surfaces are now filled; only the counterfactual panel still carries a placeholder. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
+
+- **Standing belongs to the *proposer*, not `routed_to` — they are routinely different.** The domain agent reasons about an incident and the Planner proposes the action, so a parked record reads `routed_to: supply-chain-agent` alongside `subject: remediation-planner@v3`. The gateway checks standing against the subject; anything deriving a hold reason must read `proposed_by`, never `routed_to`. Item 31 shipped this bug and only the live queue exposed it (`ADR-033`), because a fixture using one agent for both roles passes either way.
+
+- **Recovering a deployed secret: use `--format=json` and parse it.** `gcloud run services describe --format="value(...env.filter(...).extract("value"))"` returns a JSON-wrapped string, and feeding that back into `deploy.sh` silently rewrites the live `PROVENANCE_TRIGGER_TOKEN`. It cost two revisions during item 31.
+
+- **`verify_approval_queue.py` refuses on an *answered* record too, not just a parked one.** Its teardown deletes the whole `approvals` collection, so the demo's deny beat leaves a `DENIED` record that blocks the next run. Clear it deliberately — the durable record of a verdict is the `authorizations/` ledger row, which deleting the queue entry does not touch.
+
+- **`GET /` is not cache-busted.** Every `fetch` in the UI passes `cache: "no-store"`, but the shell HTML does not, so a browser that loaded the page before a redeploy runs the *old* JavaScript against the new routes. Cost half an hour during item 31. Hard-reload between takes (item 37), or add a cache header if it becomes a habit.
+
+- **`GET /approvals` now reads the registry, so a registry outage 503s the approval queue.** Item 31's card derives `hold_reason` from a request-time `registry.get_agent()` per parked record, because a park is exactly the window in which standing moves. That is deliberate (`ADR-033` reason 11: a card that cannot state its grounds is worse than no card), but it means the queue has a second failure mode the README's curl did not have. Don't "fix" it by falling back to a blank hold reason.
 
 - **Before 2026-09-22, re-affirm `SUP-042`.** Its v2 expires **2026-09-22** and `belief-service.tier2` expires **2026-09-24**, both inside the Oct 1 judging window — so from those dates item 29's Sweeper downgrades them to `UNKNOWN` on any warm instance, destroying the closing shot and the state items 27 and 28 both proved byte-identical. This is the Sweeper being correct, not a bug, and there is deliberately **no skip list** (`ADR-031`, the live finding). The fix is the mechanism the design already has: commit one fresh corroborating evidence item to `SUP-042` through the normal pipeline, which supersedes v2 and resets the clock. `seed_belief.py` has no `--reset` and must not grow one.
 

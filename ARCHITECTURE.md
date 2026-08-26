@@ -521,6 +521,23 @@ The one deviation from "one stream, both destinations": Cloud **Trace** export i
 - **The counterfactual panel** — the measured A/B (memory on vs `--memory-disabled`): wall-clock, tool calls, tokens, hypotheses evaluated before the correct one.
 - **The registry panel** — standing, live, so a DEGRADED transition is visible the instant it happens.
 
+**As built (ROADMAP item 31) — the card, and `GET /approvals` grew two derived keys.**
+`provenance/web/index.html`, still hand-written, still no framework — the third time that
+question has been asked and the first time it has been *answered* rather than deferred, because
+the approve button turned out to need no client-side write state at all
+([`ADR-033`](./docs/adr/ADR-033-the-approval-card.md) reason 6, closing ADR-008's and ADR-015's
+clauses). The panel polls **5s**, the registry tick. It renders every parked record, newest
+first, and repaints only when the queue's ids, hold reasons or scores change — a blind repaint
+would wipe what the approver is typing. **The route computes what the record does not store:**
+`risk` from `risk.score()` and `hold_reason` from a request-time registry read, added *beside*
+the stored fields so every reader written before this one still parses. Neither is stored on the
+park, because a park is exactly the window in which standing moves. A proposal that no longer
+validates renders "not scored"; a registry outage is a `503`, for the reason an unreadable queue
+is. The card's plain language is English for the §4.2 enum values and the stored trigger facts —
+no prose table keyed by `action_class`, and nothing a model wrote. **This corrects the note
+below**: `flagged_by` is *not* rendered by item 31 either, and the clause now points at the
+first `REFUTED` retraction against a cited belief rather than at a card that retracts nothing.
+
 **As built (ROADMAP item 30) — two routes, and no UI.** `GET /approvals` serves the parked queue whole (unauthenticated, for the reason the other three reads are: item 36's cold judge, and a read spends nothing; `ApprovalError → 503`, so "the queue was unreadable" and "nothing needs you" cannot look alike). `POST /approvals/{id}` takes `{verdict, approver}` behind `/trigger`'s existing guard — a resume runs the Verification Agent, so it spends model tokens against the same fixed credit, which is the argument that guarded `/trigger` — and answers `404` on an absent record, `409` on one already answered, `400` on an approver that is not an identifier. **`index.html` is untouched**: the Approval-card placeholder still names item 31, which is the surface item. Reasoning in [`ADR-032`](./docs/adr/ADR-032-the-approval-queue.md) §14.
 
 **As built (ROADMAP items 11, 17 and 28) — four of the six, and three routes.** The live fleet view and the gateway ledger are filled and read the span stream; the **belief inspector** is filled by item 17 and reads `GET /belief/{entity}`; the **registry panel** is filled by item 28 and reads `GET /registry`. The other two keep the placeholders item 3 left, each naming the item that fills it.
