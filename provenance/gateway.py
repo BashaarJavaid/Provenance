@@ -2,13 +2,21 @@
 
 `ARCHITECTURE.md` §1.1's first load-bearing property: "There is no direct path from any
 reasoning agent to a state-mutating action. The gateway is architecturally the only path.
-If a second path exists, the security story collapses." This module is that path, and
-`authorize()` is its single entry point.
+If a second path exists, the security story collapses." This module is that path.
 
-It takes an untrusted `object`, not a validated `Action`, and runs §2.1 stage 1 itself.
-That is deliberate: it is what makes `DENY(stage="schema")` reachable, and it means there
-is no way to reach the risk table without having passed validation, because the only door
-does both.
+**There are two public doors, and item 30 is why.** `authorize()` runs §2.1 stages 1-6 on a
+proposal an agent just made. `resolve()` runs §2.1 stage 7 -- a human's answer to an action
+this gateway already held -- because re-running `authorize()` after an approval would
+deterministically HOLD it again: §4.2 is a lookup, and nothing about it changes when a person
+says yes. The human's authority has to enter the pipeline somewhere, and property 1 says it
+enters here or the property is false. That is the same shape the Policy Engine took when
+`expire()` joined `commit()` and `retract()`: one authority, one module, more than one
+question it can be asked. Neither door executes anything.
+
+Both doors take an untrusted `object`, not a validated `Action`, and run §2.1 stage 1
+themselves. That is deliberate: it is what makes `DENY(stage="schema")` reachable, and it
+means there is no way to reach the risk table without having passed validation, because
+every door does both.
 
 The stages, and where each one's denial comes from:
 
@@ -19,6 +27,7 @@ The stages, and where each one's denial comes from:
 | `identity` | `credentials.verify()` against the stored `public_key` | `CREDENTIAL_INVALID`, `CREDENTIAL_EXPIRED` |
 | `abac` | `agent.tool_scope`, then the Portunus ABAC condition | `TOOL_SCOPE` |
 | `risk` | `risk.score()` — the §4.2 table, never a model | `RISK_THRESHOLD` (holds, never denies) |
+| `human` | the store operations manager, via `resolve()` (§2.1 stage 7) | `HUMAN_DENIED` (and `HUMAN_APPROVED`, the one reason that is not a refusal) |
 
 **Physical order differs from §2.1's numbering, once.** §2.1 lists identity as stage 2 and
 the registry read as stage 3, but the public key the credential is checked against *is* a
@@ -71,7 +80,15 @@ DecisionReason = Literal[
     "STANDING_DEGRADED",
     "TOOL_SCOPE",
     "RISK_THRESHOLD",
+    # Item 30's two, and the only pair in this vocabulary that report what a *person* decided
+    # rather than what a check found. They can only ever accompany `stage="human"`.
+    "HUMAN_APPROVED",
+    "HUMAN_DENIED",
 ]
+
+# What a human may answer. A closed pair, checked the way every other vocabulary here is: the
+# HTTP boundary hands this straight through, and "approve" is the only string that approves.
+HumanVerdict = Literal["approve", "deny"]
 
 # The one attribute condition, compiled once. `abac.ATTRIBUTE_ROOTS` is a fixed
 # {identity, tool, context, risk} (pinned by tests/test_portunus_surface.py), and standing
@@ -141,16 +158,30 @@ def public_key_pem() -> str:
     return pem.decode()
 
 
-def _subject(credential: credentials.Credential, proposal: action.Action | None) -> str:
+def _subject(agent_id: str, agent_version: str, proposal: action.Action | None) -> str:
     """What a decision is about, as one string, so the signature is bound to it.
 
     Without this the signature covers only the verdict, and a signed APPROVE could be
-    lifted from a rollback onto a compliance-check disable. The agent halves come from the
-    *credential*, not from `proposed_by`, because the credential is the authenticated one.
+    lifted from a rollback onto a compliance-check disable. `authorize()` passes the agent
+    halves off the *credential*, not off `proposed_by`, because the credential is the
+    authenticated one; `resolve()` passes them off the parked subject, which is the same
+    string this function produced when the hold was signed.
     """
     action_class = "" if proposal is None else proposal.action_class
     target = "" if proposal is None else proposal.target
-    return f"{credential.agent_id}@{credential.agent_version}|{action_class}|{target}"
+    return f"{agent_id}@{agent_version}|{action_class}|{target}"
+
+
+def _agent_halves(subject: str) -> tuple[str, str]:
+    """Split `"agent@version|class|target"` back into its agent id and version.
+
+    Only the two halves are taken. The action class and target in a stored subject are
+    *not* read back: `resolve()` re-derives those from the re-validated proposal, so a
+    tampered `proposals` field cannot inherit the identity the gateway signed.
+    """
+    identity = subject.partition("|")[0]
+    agent_id, _, agent_version = identity.partition("@")
+    return agent_id, agent_version
 
 
 def _decision_hash(
@@ -268,8 +299,91 @@ async def authorize(
     from a denial that should have been recorded (§7.3).
     """
     verdict = await _decide(proposal, credential, now=now, client=client)
+    return _finish(verdict, agent_id=credential.agent_id, agent_version=credential.agent_version)
+
+
+async def resolve(
+    proposal: object,
+    *,
+    subject: str,
+    verdict: HumanVerdict,
+    approver: str,
+    now: datetime,
+    client: Any | None = None,
+) -> Decision:
+    """§2.1 stage 7 — the human's answer to a parked action, as a signed Decision (item 30).
+
+    The second public coroutine, and the reason there is one: re-running `authorize()` on an
+    approved proposal would deterministically HOLD it again, because §4.2 is a lookup and
+    nothing about it changes when a person says yes. The human's authority has to enter the
+    pipeline somewhere, and §1.1 property 1 says the somewhere is here — a resume that
+    signed its own approval anywhere else would be the second path that property forbids.
+
+    **It trusts nothing the queue stored.** It takes `object`, the way `authorize()` does,
+    and re-runs §2.1 stage 1 itself; it re-reads the registry (§1.1 property 4 -- a resume is
+    a request); and it recomputes §4.2 from the re-validated action rather than reading back
+    the score the hold carried. That is not belt-and-braces: `_signing_key()` is generated
+    per process, so a park that outlived its process cannot have its own signature checked,
+    and the answer is to make the stored record an *input* to the pipeline rather than a
+    conclusion. Tampering with a parked proposal therefore changes its score deterministically
+    instead of slipping past a check, and `approver` never touches the arithmetic.
+
+    No credential is involved and none is minted. `credentials.CREDENTIAL_TTL_SECONDS` is 300,
+    so the agent's credential expired inside any park worth the name; minting a fresh one on
+    its behalf would be the gateway forging the identity it exists to check. The authority
+    carried here is the gateway's own signature over a human's verdict, which is why the
+    `subject` keeps the agent halves the hold was signed with -- the decision is still *about*
+    that agent's action.
+
+    Fail-closed before the verdict is ever consulted, in this order: a proposal that no longer
+    validates, an unreadable registry, an agent that no longer exists, an agent rotated to a
+    new version since the park, and an agent the fleet has since SUSPENDED all deny -- a human
+    may not approve an action for an agent the fleet has stopped trusting. Reasoning in
+    `docs/adr/ADR-032`.
+    """
+    resolved = await _re_decide(proposal, subject, verdict, client=client)
+    agent_id, agent_version = _agent_halves(subject)
+    return _finish(resolved, agent_id=agent_id, agent_version=agent_version)
+
+
+async def _re_decide(
+    proposal: object, subject: str, verdict: HumanVerdict, *, client: Any | None
+) -> _Verdict:
+    """`_decide()`'s stages minus the ones a park cannot carry, plus the human's answer."""
+    try:
+        validated = action.validate(proposal)
+    except action.ActionError:
+        return _Verdict("DENY", "schema", "SCHEMA_INVALID")
+
+    agent_id, agent_version = _agent_halves(subject)
+    try:
+        agent = await registry.get_agent(agent_id, client=client)
+    except registry.AgentNotRegistered:
+        return _Verdict("DENY", "registry", "AGENT_NOT_REGISTERED", validated)
+    except registry.RegistryError:
+        return _Verdict("DENY", "registry", "REGISTRY_UNAVAILABLE", validated)
+
+    # The park's own identity check. `authorize()` compares the *credential's* version against
+    # the registry's; there is no credential here, so the comparison is against the version the
+    # hold was signed with. An agent rotated during a park proposed this as somebody it no
+    # longer is, and `--rotate` is a human act -- the same posture as a suspension.
+    if agent_version != agent.version:
+        return _Verdict("DENY", "identity", "CREDENTIAL_INVALID", validated, agent)
+    if agent.standing == "SUSPENDED":
+        return _Verdict("DENY", "registry", "STANDING_SUSPENDED", validated, agent)
+
+    # §4.2 recomputed, never read back. It rides along on both verdicts because item 31's card
+    # renders the arithmetic for everything a human was asked about, including what they denied.
+    scored = risk.score(validated)
+    if verdict == "approve":
+        return _Verdict("APPROVE", "human", "HUMAN_APPROVED", validated, agent, scored)
+    return _Verdict("DENY", "human", "HUMAN_DENIED", validated, agent, scored)
+
+
+def _finish(verdict: _Verdict, *, agent_id: str, agent_version: str) -> Decision:
+    """Sign one verdict and emit its §8.1 span. The tail both public doors share."""
     proposed = verdict.proposal
-    subject = _subject(credential, proposed)
+    subject = _subject(agent_id, agent_version, proposed)
     signature: bytes = signing.sign(
         _signing_key(),
         _decision_hash(verdict.outcome, verdict.stage, verdict.reason, subject, verdict.score),
@@ -284,8 +398,8 @@ async def authorize(
     )
 
     with telemetry.authorization_decision(
-        agent_id=credential.agent_id,
-        agent_version=credential.agent_version,
+        agent_id=agent_id,
+        agent_version=agent_version,
         standing=None if verdict.agent is None else verdict.agent.standing,
         action_class=None if proposed is None else proposed.action_class,
         target=None if proposed is None else proposed.target,

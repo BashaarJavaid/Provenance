@@ -56,7 +56,12 @@ BlastRadius = Literal["single-service", "multi-service", "org-wide"]
 TargetKind = Literal["service", "supplier"]
 Standing = Literal["GOOD", "DEGRADED", "SUSPENDED"]
 AuthOutcome = Literal["APPROVE", "APPROVE_NOTIFY", "HOLD", "DENY"]
-AuthStage = Literal["schema", "identity", "registry", "abac", "risk"]
+AuthStage = Literal["schema", "identity", "registry", "abac", "risk", "human"]
+# `human` is item 30's and is the one stage no agent can reach: §2.1 stage 7, a parked
+# action answered by the store operations manager. It shares the shape rather than taking a
+# fifth one for item 29's reason -- it is the same decision, signed and reported, so it took a
+# word. Its outcome is an ordinary `APPROVE` or `DENY`, which is what puts a human denial in
+# `_ERROR_OUTCOMES` with no rule of its own.
 BeliefScope = Literal["ENTITY", "CLASS"]
 # `EXPIRE` is item 29's and is the one outcome no agent proposes: §6.5's Sweeper downgrading a
 # belief whose clock ran out. It shares the shape rather than taking a fifth one because it is
@@ -235,6 +240,18 @@ def _serialize(span: ReadableSpan) -> dict[str, object]:
         "status": span.status.status_code.name,
         "attrs": dict(span.attributes or {}),
     }
+
+
+def current_trace_id() -> str:
+    """The trace the caller is inside, as 32 hex characters, or `""` outside any span.
+
+    Item 30 stores this on a parked approval so the resumed leg -- which opens its own root
+    span, in a process that may be days newer -- carries a pointer back to the trace the hold
+    happened in. Read through this module rather than through the OTel API directly, on the
+    same rule that says spans are emitted only through these helpers.
+    """
+    context = trace.get_current_span().get_span_context()
+    return "" if not context.is_valid else format(context.trace_id, "032x")
 
 
 def configure_tracing(project_id: str | None = None) -> bool:

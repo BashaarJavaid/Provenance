@@ -52,7 +52,7 @@ Rules that follow from it:
 
 The four load-bearing properties from `ARCHITECTURE.md` §1.1 are hard rules, not guidelines — a change that violates one is wrong no matter how convenient:
 
-- **No direct path from any reasoning agent to a state-mutating action.** The gateway is the only path. Don't add a second one "for testing" that could ship. `gateway.authorize()` is the module's only public coroutine; it takes `object`, not `Action`, and every terminal outcome is a returned `Decision`.
+- **No direct path from any reasoning agent to a state-mutating action.** The gateway is the only path. Don't add a second one "for testing" that could ship. The module has **two** public coroutines since item 30 and must not grow a third without an ADR: `gateway.authorize()` runs §2.1 stages 1-6 on a proposal, `gateway.resolve()` runs stage 7 on a human's answer (re-running `authorize()` after an approval would deterministically HOLD again). Both take `object`, not `Action`, and every terminal outcome is a returned `Decision`. `tests/test_gateway.py` pins the count at two.
 - **The memory write path mirrors the action path.** Probabilistic recommends, deterministic decides — for beliefs as for actions. The Memory Analyst never commits; the Policy Engine never reasons. Don't add an Analyst node to the incident graph; it runs from a seeder.
 - **No LLM-generated number is an input to a deterministic decision.** Confidence comes from the published noisy-OR formula (`ARCHITECTURE.md` §4.3); risk comes from the lookup table (§4.2). If a change makes a model-asserted number decisive anywhere, it has crossed the determinism boundary — reject it.
 - **The registry is read at request time, not at boot.** Don't cache standing. `get_agent()` reads Firestore on every call.
@@ -69,7 +69,7 @@ Further conventions:
 - No ML/LLM-based risk scoring — a deliberate constraint (see `docs/adr/ADR-003`), not a gap to fill in later. `risk.BASE` is the only home of `base[action_class]`; a third tool cannot ship without a base score. Don't add a third supplier tool to reach execution — the supply-chain incident ending `HELD` at 11 is the design.
 - PortunusMCP is a library dependency only; all track-facing authorization logic is new code here and must stay visibly so in the commit history (disclosure table in `README.md`, reasoning in `ADR-004`). It installs as a separate `--no-deps` step and **must never go in `pyproject.toml`**. CI must not gate on `pip check`. The Dockerfile's two-step install must stay two steps in that order.
 - Emit spans only through `provenance/telemetry.py` helpers. Don't call the OTel tracer directly, and don't invent a new span shape or a content-bearing attribute key without changing `ARCHITECTURE.md` §8.1 and `tests/test_telemetry_schema.py` together. Attributes carry identifiers, hashes, enums and numbers — never content.
-- `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` is token-guarded and **fails closed when `PROVENANCE_TRIGGER_TOKEN` is unset** — don't remove the guard. `GET /trace`, `GET /belief/{entity}` and `GET /registry` are unauthenticated on purpose.
+- `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` and `POST /approvals/{id}` are token-guarded by the **same** `PROVENANCE_TRIGGER_TOKEN` and **fail closed when it is unset** — don't remove either guard, and don't add a second secret. `GET /trace`, `GET /belief/{entity}`, `GET /registry` and `GET /approvals` are unauthenticated on purpose.
 - Deploy at `--max-instances=1` (the trace UI's span buffer is in-process) and `--min-instances=0`. Don't raise either for convenience.
 - No entity document carries a `status` / `confidence` / `belief` field — `SUP-042` is AT_RISK through the belief store, never as a seeded field. `inventory-api` is tier2 and `SUP-042` is tier1 (the only route to the frozen scores 2 and 11); `pricing-api` has no config history on purpose.
 - Reasoning roles run on `gemini-2.5-pro`; verification on `gemini-3.5-flash`; the item-26 sanitizer on `gemma-4-26b-a4b-it-maas`. Gemini 3.5 Pro is not served to this project. Gemini 3.x lives on the **`global`** endpoint.
@@ -120,6 +120,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_injection_arc.py` — item 27; mutates nothing; run `verify_supply_chain.py` alongside it — same trigger without the payload, same 11
 - `scripts/verify_poisoning_arc.py` — item 28; **writes live registry state** and restores it; no model calls
 - `scripts/verify_sweeper.py` — item 29; writes three scratch beliefs and deletes them; needs the app running (or `PROVENANCE_SERVICE_URL`) for its inspector step; no model calls
+- `scripts/verify_approval_queue.py` — item 30; **writes live registry state** and restores it; default run waits a real 310s parked (`--park-seconds`); `--park-only` / `--resume <id>` run the two halves in two processes, which is the only check of "survives a restart"; teardown imported from `verify_incident_one.py`
 
 Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 
@@ -135,11 +136,13 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–9 done. Items 0.5–29 shipped (Aug 26). **Item 30 (the approval queue with park/resume) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–9 done and Phase 10 half done. Items 0.5–30 shipped (Aug 26). **Item 31 (the plain-language approval card) is next**, and it is the surface half of the item just shipped: item 30 built the queue as two routes and left `provenance/web/index.html` untouched. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
 
 - **Before 2026-09-22, re-affirm `SUP-042`.** Its v2 expires **2026-09-22** and `belief-service.tier2` expires **2026-09-24**, both inside the Oct 1 judging window — so from those dates item 29's Sweeper downgrades them to `UNKNOWN` on any warm instance, destroying the closing shot and the state items 27 and 28 both proved byte-identical. This is the Sweeper being correct, not a bug, and there is deliberately **no skip list** (`ADR-031`, the live finding). The fix is the mechanism the design already has: commit one fresh corroborating evidence item to `SUP-042` through the normal pipeline, which supersedes v2 and resets the clock. `seed_belief.py` has no `--reset` and must not grow one.
+
+- **`scripts/verify_approval_queue.py`'s teardown deletes the whole `approvals` collection**, so it refuses to start if the collection is non-empty — a stranded park is somebody's unanswered question, and an interrupted run leaves one. Answer it (`POST /approvals/{id}`) or delete it deliberately before re-running. It also refuses unless `remediation-planner` starts `GOOD` with an empty window, and its `finally` restores that. Between a `--park-only` and its `--resume`, standing stays `DEGRADED` and the fixture stays faulted **on purpose**: the resume half has to find the world the park left, and it is what restores both.
 
 - `seed_registry.py`, `seed_belief.py`, `seed_class_belief.py`, and `setup_model_armor.py` have **no `--reset`**. Don't invent one. A re-run must never rewrite a stored `DEGRADED`, a poisoned-then-defended `SUP-042` chain, the class belief, or a Model Armor template item 27 may tune on camera.
 - `SUP-042`'s chain and `belief-service.tier2` are permanent demo state. Items 27 and 28 both attack the first and both left it byte-identical; that is the closing shot, so anything that rewrites it destroys what two items proved. The class name is the Analyst's — read it out of the store, don't hardcode it. `pricing-api` must stay belief-free.

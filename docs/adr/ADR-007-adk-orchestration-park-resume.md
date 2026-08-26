@@ -12,6 +12,8 @@
 
 **Boundary discipline still applies:** ADK routes and delegates; it does not authorize. The gateway and the Memory Policy Engine remain the only authorities, and they are plain deterministic code that ADK calls — never the reverse.
 
+**Superseded in part by [`ADR-032`](./ADR-032-the-approval-queue.md) (item 30): `google-adk==2.7.1` has no Task API.** The Graph Runtime half of this decision stands and is what items 9 through 24 were built on. The park/resume half rested on a managed API that turns out not to exist — the nearest primitives are `Runner.run_async(invocation_id=…)`, `ResumabilityConfig` and a pluggable `SessionService`, and neither available session backend survives `--min-instances=0` without a paid, idle-billing resource. What shipped is a Firestore `approvals/{id}` record and a second gateway door; ADR-032 records why, including why reason 1 below now argues *for* that shape rather than against it.
+
 **Revisit when:** the Graph Runtime can't express a control-flow requirement cleanly (e.g. the Sweeper's continuous loop may live better as a plain Cloud Run service that merely *emits* into the same trace stream — decide at Phase 9, not before).
 
 **Alternatives considered:** LangGraph (prior art in ProdRescue and well understood, but off-stack for a Google track and would strand the Task API's managed park/resume); hand-rolled asyncio orchestration (full control, but durable suspension is precisely the hard part); Temporal/Cloud Workflows (durable execution without agent-framework integration — a second orchestration layer to reconcile with ADK).

@@ -1901,3 +1901,215 @@ def test_a_leaked_payload_still_ends_held_at_the_published_arithmetic(
     for blob in haystacks:
         for token in RAW_TOKENS:
             assert token not in blob
+
+
+# --- item 30: the park, and the resumed leg ------------------------------------------------
+
+
+def resume(
+    approval_id: str,
+    *,
+    store: FakeFirestore,
+    verdict: incident.gateway.HumanVerdict = "approve",
+    approver: str = "dana.ruiz",
+    replies: list[str] | None = None,
+    now: datetime | None = None,
+) -> incident.IncidentResult:
+    """The other public coroutine. Only the Verification Agent runs, and only on approve."""
+    model = FakeLlm(model="fake-model", replies=list(replies or [a_verification()]), prompts=[])
+    return asyncio.run(
+        incident.resume(
+            approval_id,
+            verdict=verdict,
+            approver=approver,
+            now=now,
+            client=store,
+            model_verification=model,
+        )
+    )
+
+
+def parked(store: FakeFirestore) -> dict[str, Any]:
+    """The one queue entry, as stored. Asserting on the document is the point of the park."""
+    records = store.collections[incident.approvals.COLLECTION]
+    assert len(records) == 1
+    return next(iter(records.values()))
+
+
+def a_held_incident(store: FakeFirestore | None = None) -> tuple[Any, FakeFirestore]:
+    """§3.4's DEGRADED hold, which is item 28's beat and the one that has somewhere to go."""
+    store = store if store is not None else a_store(standing="DEGRADED")
+    result = run(a_clean_run(), store=store, now=NOW)
+    assert result.outcome == "HELD"
+    return result, store
+
+
+def test_a_held_incident_parks_and_names_the_record() -> None:
+    result, store = a_held_incident()
+    assert result.approval_id is not None
+    record = parked(store)
+    assert record["id"] == result.approval_id
+    assert (record["state"], record["incident_id"]) == ("PARKED", result.incident_id)
+    assert record["held_signature"] == (result.decision and result.decision.signature)
+
+
+def test_the_park_carries_what_the_fleet_actually_did() -> None:
+    _, store = a_held_incident()
+    record = parked(store)
+    # The routing the Orchestrator chose, not one a resume re-derives from the entity kind.
+    assert (record["domain"], record["routed_to"]) == ("infrastructure", "sre-infra-agent")
+    assert (record["trigger_target"], record["trigger_signal"]) == ("inventory-api", "error_rate")
+    # The proposal as emitted, so `gateway.resolve()` can re-validate it rather than trust it.
+    assert record["proposal"]["action_class"] == "ROLLBACK_CONFIG"
+    assert record["trace_id"] != ""
+
+
+def test_a_denied_proposal_parks_nothing() -> None:
+    # §2.1: a DENY is over. Only a HOLD is a question somebody was asked.
+    result = run(a_clean_run(), store=a_store(standing="SUSPENDED"))
+    assert result.outcome == "DENIED"
+    assert result.approval_id is None
+
+
+def test_an_approved_incident_parks_nothing() -> None:
+    result = run(a_clean_run())
+    assert (result.outcome, result.approval_id) == ("RESOLVED", None)
+
+
+def test_a_queue_that_cannot_be_written_escalates_rather_than_dropping_the_hold() -> None:
+    # §7.3, the posture the ledger write beside it already takes: a held action nobody can find
+    # is one no human is ever asked about, which turns §2.1 stage 7 into a silent drop.
+    class NoQueue(FakeFirestore):
+        def collection(self, name: str) -> Any:
+            if name == incident.approvals.COLLECTION:
+                raise ServiceUnavailable("down")
+            return super().collection(name)
+
+    store = a_store(standing="DEGRADED")
+    broken = NoQueue(store.docs, **{k: v for k, v in store.collections.items() if k != "agents"})
+    result = run(a_clean_run(), store=broken, now=NOW)
+    assert result.outcome == "ESCALATED"
+    assert result.approval_id is None
+
+
+# --- resuming ------------------------------------------------------------------------------
+
+
+def test_an_approved_park_executes_verifies_and_learns() -> None:
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    result = resume(held.approval_id, store=store)
+
+    assert result.outcome == "RESOLVED"
+    # The same incident, continued -- not a new one.
+    assert result.incident_id == held.incident_id
+    assert result.decision is not None
+    assert (result.decision.outcome, result.decision.stage) == ("APPROVE", "human")
+    assert result.execution is not None and not result.execution.rollback_failed
+    assert (result.execution.from_version, result.execution.to_version) == ("v42", "v41")
+    assert result.verification == "CONFIRMED"
+    assert result.belief is not None and result.belief.outcome == "COMMIT"
+    assert parked(store)["state"] == "APPROVED"
+
+
+def test_a_denied_park_executes_nothing_and_is_signed_into_the_ledger() -> None:
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    result = resume(held.approval_id, store=store, verdict="deny", replies=[])
+
+    assert result.outcome == "DENIED"
+    assert result.decision is not None
+    assert (result.decision.outcome, result.decision.reason) == ("DENY", "HUMAN_DENIED")
+    # The item's own line. Item 15 recorded approvals only; a human's answer is the case that
+    # rule was never about, because somebody was asked and answered.
+    rows = list(store.collections[audit.COLLECTION].values())
+    assert len(rows) == 1
+    assert (rows[0]["outcome"], rows[0]["approver"]) == ("DENY", "dana.ruiz")
+    assert (result.execution, result.verification, result.belief) == (None, None, None)
+    assert parked(store)["state"] == "DENIED"
+
+
+def test_the_resumed_ledger_row_cites_the_beliefs_the_park_carried() -> None:
+    # §6.4's retraction join has to survive a park: a retraction days later must still find the
+    # action a human approved, and it finds it through these ids. Recall runs once, at trigger
+    # time, so the park is the only place they can come from -- which is why the belief is
+    # seeded here rather than left to the cold fixture, where an empty list would match an
+    # empty list and prove nothing.
+    store = a_store(standing="DEGRADED")
+    a_prior_belief(store, a_prior_version(1))
+    held, store = a_held_incident(store)
+    assert held.approval_id is not None
+    assert parked(store)["entity_ids"] == ["belief-inventory-api"]
+
+    resume(held.approval_id, store=store)
+    row = next(iter(store.collections[audit.COLLECTION].values()))
+    assert row["belief_ids"] == ["belief-inventory-api"]
+    assert (row["outcome"], row["approver"]) == ("APPROVE", "dana.ruiz")
+
+
+def test_a_verdict_cannot_be_given_twice() -> None:
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    resume(held.approval_id, store=store)
+    with pytest.raises(incident.approvals.ApprovalNotPending):
+        resume(held.approval_id, store=store)
+
+
+def test_a_human_cannot_approve_for_an_agent_suspended_during_the_park() -> None:
+    # §1.1 property 4: a resume is a request, so the registry is read again. The park is the
+    # window in which standing can move, which is exactly why it is re-read.
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    store.docs["remediation-planner"]["standing"] = "SUSPENDED"
+    result = resume(held.approval_id, store=store, replies=[])
+    assert result.outcome == "DENIED"
+    assert result.decision is not None and result.decision.reason == "STANDING_SUSPENDED"
+    assert result.execution is None
+
+
+def test_the_resumed_leg_runs_on_a_fresh_clock() -> None:
+    # A post-state measured after a park did not happen at trigger time. §2.2's novelty check
+    # compares `(source_id, observed_at)` pairs, so backdating it is item 20's defect again.
+    # The claim is about the *default*: a caller that passes no clock gets a real one, not the
+    # incident's frozen `now`, which is the only way a day-long park writes an honest belief.
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    result = resume(held.approval_id, store=store)  # no `now`
+
+    assert result.belief is not None
+    # The root document's `created_at` is written from the first version's `committed_at`
+    # (`beliefs.py`), which is the stamp this test is about; the fake store holds root
+    # documents in this collection and versions in a subcollection.
+    committed = next(
+        v for k, v in store.collections[beliefs.COLLECTION].items() if k.endswith("inventory-api")
+    )
+    real_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert committed["created_at"] != NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert committed["created_at"][:13] == real_now[:13]  # same hour as the wall clock
+
+
+def test_the_resumed_leg_opens_its_own_trace_under_the_same_incident_id(
+    spans: InMemorySpanExporter,
+) -> None:
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    parked_trace = parked(store)["trace_id"]
+    spans.clear()
+    result = resume(held.approval_id, store=store)
+
+    roots = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_INCIDENT]
+    assert len(roots) == 1
+    assert roots[0].attributes is not None
+    assert roots[0].attributes["provenance.incident.id"] == result.incident_id
+    # A different trace, and the parked one is the stored pointer back to it.
+    assert roots[0].context is not None
+    assert format(roots[0].context.trace_id, "032x") != parked_trace
+    assert parked_trace != ""
+
+
+def test_an_approver_that_is_not_an_identifier_never_reaches_the_gateway() -> None:
+    held, store = a_held_incident()
+    assert held.approval_id is not None
+    with pytest.raises(incident.approvals.ApprovalError):
+        resume(held.approval_id, store=store, approver="dana ruiz", replies=[])
+    assert parked(store)["state"] == "PARKED"

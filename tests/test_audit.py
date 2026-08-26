@@ -194,3 +194,48 @@ def test_a_malformed_stored_record_raises() -> None:
 
     with pytest.raises(audit.AuditError):
         asyncio.run(audit.read(entry.id, client=store))
+
+
+# --- item 30: a human's verdict ----------------------------------------------------------------
+
+
+def test_a_record_carries_no_approver_unless_a_human_gave_one() -> None:
+    # `agent_id` is the proposer either way. `approver` is who answered *for* it, and it is
+    # empty on every row an agent's own proposal produced.
+    entry = record(a_store())
+    assert entry.approver == ""
+
+
+def test_a_human_verdict_is_recorded_with_who_gave_it() -> None:
+    store = a_store()
+    entry = asyncio.run(
+        audit.record(
+            agent_id="remediation-planner",
+            action_class="ROLLBACK_CONFIG",
+            target="inventory-api",
+            outcome="DENY",
+            subject="remediation-planner@v3|ROLLBACK_CONFIG|inventory-api",
+            signature="ecdsa:human",
+            belief_ids=(BELIEF_ID,),
+            approver="dana.ruiz",
+            now=NOW,
+            client=store,
+        )
+    )
+    # §6.4 said "previously authorized" and item 15 read that as approvals only. A human denial
+    # is the case that rule was never about: somebody was asked, and answered.
+    assert (entry.outcome, entry.approver, entry.agent_id) == (
+        "DENY",
+        "dana.ruiz",
+        "remediation-planner",
+    )
+    assert stored(store)[entry.id]["approver"] == "dana.ruiz"
+
+
+def test_a_record_written_before_item_30_still_parses() -> None:
+    # `authorizations/` predates this field by fifteen items, and the live collection holds
+    # rows with no `approver` key at all. Defaulting on read is what keeps them readable.
+    store = a_store()
+    entry = record(store)
+    del stored(store)[entry.id]["approver"]
+    assert audit.from_document(entry.id, stored(store)[entry.id]).approver == ""

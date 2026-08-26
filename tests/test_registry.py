@@ -122,27 +122,38 @@ class _FakeCollection:
             yield FakeSnapshot(data, doc_id)
 
     def where(self, *, filter: Any) -> _FakeQuery:
-        """Item 15's `audit.flag()` is the one caller, and `array_contains` its one operator."""
+        """Two callers, two operators: item 15's `audit.flag()` and item 30's `pending()`."""
         field, op, value = filter.field_path, filter.op_string, filter.value
-        if op != "array_contains":
-            raise NotImplementedError(f"the fake store supports array_contains, not {op!r}")
-        return _FakeQuery(self._store, self._docs, field, value)
+        if op not in ("array_contains", "=="):
+            raise NotImplementedError(f"the fake store supports array_contains and ==, not {op!r}")
+        return _FakeQuery(self._store, self._docs, field, op, value)
 
 
 class _FakeQuery:
     def __init__(
-        self, store: FakeFirestore, docs: dict[str, dict[str, Any]], field: str, value: Any
+        self,
+        store: FakeFirestore,
+        docs: dict[str, dict[str, Any]],
+        field: str,
+        op: str,
+        value: Any,
     ) -> None:
         self._store = store
         self._docs = docs
         self._field = field
+        self._op = op
         self._value = value
+
+    def _matches(self, data: dict[str, Any]) -> bool:
+        if self._op == "==":
+            return bool(data.get(self._field) == self._value)
+        return bool(self._value in data.get(self._field, []))
 
     async def stream(self) -> AsyncIterator[FakeSnapshot]:
         if self._store.error is not None:
             raise self._store.error
         for doc_id, data in list(self._docs.items()):
-            if self._value in data.get(self._field, []):
+            if self._matches(data):
                 yield FakeSnapshot(data, doc_id)
 
 

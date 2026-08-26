@@ -93,7 +93,7 @@ version}` were made optional so that pre-standing denials still reach the audit 
    swallow into "nothing happened" — and a swallowed denial is an unrecorded one.
 
 **What this deliberately does not do:** execute anything (an APPROVE is a return value; item 10
-owns the executor), park or resume a held incident (§2.1 stage 7 → item 30's ADK Task API), keep
+owns the executor), park a held incident (§2.1 stage 7 → `approvals.park()`, called by `incident.py`; item 30's `resolve()` is a second door *here*, and [`ADR-032`](./ADR-032-the-approval-queue.md) says why it had to be), keep
 the malformed-retry count (`action.outcome_for()` already ships that stateless for item 9's
 control loop), expose an HTTP route (§2.1 is a pipeline, not an endpoint — ADR-008, and
 `app.py`'s docstring), or render the ledger (item 11).
