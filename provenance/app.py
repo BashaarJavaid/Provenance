@@ -31,6 +31,17 @@ structurally cannot serve it. It is unauthenticated for the same reason `/trace`
 spends nothing. `docs/adr/ADR-021` records the departure; `THREAT_MODEL.md` records what it
 publishes.
 
+`GET /approvals` and `POST /approvals/{id}` arrived with item 30 and are the **first route
+pair here that writes**, which ADR-008 and ADR-015 both named as the honest test of "no
+framework yet". The read is unauthenticated for the reason the other three reads are -- item
+36's cold judge has to be able to see what the fleet is holding without a token. The write
+reuses `/trigger`'s guard and its secret rather than introducing a second: a resume runs the
+Verification Agent, so it spends model tokens against the same fixed credit, which is the
+entire argument that guarded `/trigger` in the first place, and somebody who can wake the
+fleet can already answer what it holds. Nothing here decides anything -- `gateway.resolve()`
+does, and it re-validates and re-scores the parked proposal rather than trusting this route
+(`docs/adr/ADR-032`).
+
 There is no route for the Staleness Sweeper (item 29) and that is deliberate. §5.11 asks for a
 long-running process, so it is one — an `asyncio` task started by the lifespan below — and a
 `POST /sweep` would have made it a cron with a public surface to guard. What drives a sweep on
@@ -55,13 +66,13 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from provenance import beliefs, incident, policy, registry, sweeper, telemetry
+from provenance import approvals, beliefs, incident, policy, registry, sweeper, telemetry
 from provenance.telemetry import TriggerSignal
 
 TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
@@ -194,6 +205,76 @@ async def agents() -> list[dict[str, Any]]:
         }
         for record in records
     ]
+
+
+@app.get("/approvals")
+async def approval_queue() -> list[dict[str, Any]]:
+    """§2.1 stage 7's queue, read side (item 30). Unauthenticated, like the other three reads.
+
+    Serves the parked records whole -- the proposal, the subject and the held signature
+    included -- because item 31's approval card renders from this and §8.1 keeps the content
+    it needs off spans, exactly as `/belief` does. Nothing here is a secret: it is a
+    description of an action the fleet has *not* taken and may not take without an answer.
+    """
+    try:
+        parked = await approvals.pending()
+    # §7.3, and `/registry`'s reasoning applied to the queue: "the queue was unreadable" and
+    # "there is nothing waiting" must not look alike. An empty panel during an outage would
+    # tell a human that nothing needs them.
+    except approvals.ApprovalError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return [asdict(record) for record in parked]
+
+
+class ApprovalRequest(BaseModel):
+    """The wire shape of a verdict. Two fields, and neither of them is a number.
+
+    `verdict` is a closed pair, so a body that means anything else is a 422 rather than a
+    default -- and the default that would otherwise apply is the dangerous one.
+    """
+
+    verdict: Literal["approve", "deny"]
+    approver: str
+
+
+@app.post("/approvals/{approval_id}")
+async def approve(
+    approval_id: str,
+    request: ApprovalRequest,
+    x_provenance_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """§2.1 stage 7 (item 30): a human answers, and the incident resumes on the other side.
+
+    The only route in this module that can end in a state-mutating action, and it reaches one
+    the same way `/trigger` does -- through the control loop, which reaches the gateway, which
+    is still the only path (§1.1 property 1). It authorizes nothing itself.
+    """
+    if not _authorized(x_provenance_token):
+        raise HTTPException(status_code=403, detail="missing or invalid trigger token")
+    try:
+        result = await incident.resume(
+            approval_id, verdict=request.verdict, approver=request.approver
+        )
+    except approvals.ApprovalNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # An already-answered park and a malformed approver are both the caller's problem and
+    # neither is a server fault: a 409 is what says "this was decided", so a retried POST reads
+    # as the no-op it is rather than as a failure worth retrying again.
+    except approvals.ApprovalNotPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except approvals.ApprovalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "incident_id": result.incident_id,
+        "approval_id": result.approval_id,
+        "outcome": result.outcome,
+        "decision": None if result.decision is None else asdict(result.decision),
+        "action": None if result.action is None else asdict(result.action),
+        # All three are null on a denial, which is the point of a denial.
+        "execution": None if result.execution is None else asdict(result.execution),
+        "verification": result.verification,
+        "belief": None if result.belief is None else asdict(result.belief),
+    }
 
 
 class TriggerRequest(BaseModel):

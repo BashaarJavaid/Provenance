@@ -53,7 +53,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -66,6 +66,7 @@ from google.genai import types
 
 from provenance import (
     action,
+    approvals,
     audit,
     beliefs,
     credentials,
@@ -231,6 +232,9 @@ class IncidentResult:
     execution: executor.ExecutionResult | None = None
     verification: VerificationOutcome | None = None
     belief: policy.BeliefCommit | None = None
+    # Item 30: set on a `HELD` incident that parked, and on a resumed one, so a caller has the
+    # id it needs to answer without going looking for it. `None` on every other outcome.
+    approval_id: str | None = None
 
 
 @dataclass
@@ -264,6 +268,9 @@ class _Scratch:
     observed_at: datetime | None = None
     verification: VerificationOutcome | None = None
     belief: policy.BeliefCommit | None = None
+    # Item 30. Set only on a HOLD, and it is the one thing a held incident leaves behind that
+    # outlives the process: everything else on this object dies with the run.
+    approval: approvals.Approval | None = None
 
 
 def load_planner_key() -> ec.EllipticCurvePrivateKey:
@@ -361,6 +368,7 @@ def _seed_state(
 
 def build_graph(
     *,
+    incident_id: str,
     trigger: Trigger,
     scratch: _Scratch,
     planner_version: str,
@@ -468,9 +476,37 @@ def build_graph(
         decision = await gateway.authorize(scratch.proposal, credential, now=now, client=client)
         scratch.decision = decision
         scratch.outcome = _OUTCOME_FOR[decision.outcome]
-        # A HOLD parks on a human (§2.1 stage 7, item 30) and a DENY is over. Only an
-        # approval continues, and `executor.execute()` re-checks the signature anyway.
+        # A HOLD parks on a human (§2.1 stage 7) and a DENY is over. Only an approval
+        # continues, and `executor.execute()` re-checks the signature anyway.
         if decision.outcome not in executor.APPROVING:
+            if decision.outcome == "HOLD":
+                assert scratch.proposal is not None  # `validate` routes here only on success
+                try:
+                    scratch.approval = await approvals.park(
+                        incident_id=incident_id,
+                        proposal=scratch.proposal,
+                        subject=decision.subject,
+                        held_signature=decision.signature,
+                        # §6.2: ENTITY ids only, for the reason the ledger write below gives at
+                        # length. The resumed row cites *these* rather than a fresh recall --
+                        # what the fleet reasoned from, not what memory happens to say later.
+                        entity_ids=scratch.recalled.entity_ids,
+                        domain=str(ctx.state.get("routed_domain", "")),
+                        routed_to=str(ctx.state.get("routed_to", "")),
+                        trigger_target=trigger.target,
+                        trigger_signal=trigger.signal,
+                        trigger_observed_value=trigger.observed_value,
+                        trace_id=telemetry.current_trace_id(),
+                        now=now,
+                        client=client,
+                    )
+                except approvals.ApprovalError as error:
+                    # Fail closed (§7.3), the posture the ledger write below already takes: a
+                    # held action nobody can find is one no human will ever be asked about,
+                    # which turns §2.1 stage 7 into a silent drop. An escalation is visible;
+                    # that is the whole difference.
+                    scratch.reasons.append(f"{type(error).__name__}: {error}")
+                    scratch.outcome = "ESCALATED"
             ctx.route = "HALT"
             return
 
@@ -833,6 +869,7 @@ async def run_incident(
         state = _seed_state(trigger, agent.version, recalled, facts)
 
         graph = build_graph(
+            incident_id=incident_id,
             trigger=trigger,
             scratch=scratch,
             planner_version=agent.version,
@@ -899,6 +936,266 @@ async def run_incident(
             ),
         )
 
+    return _result(incident_id, scratch)
+
+
+async def resume(
+    approval_id: str,
+    *,
+    verdict: gateway.HumanVerdict,
+    approver: str,
+    now: datetime | None = None,
+    client: Any | None = None,
+    model_verification: str | object = None,
+) -> IncidentResult:
+    """§2.1 stage 7's other half: a human answers a parked action (item 30).
+
+    The second public coroutine, beside `run_incident()`. It runs the remainder of the loop the
+    hold interrupted -- authorize, then execute, verify and learn -- and nothing before it: the
+    classification, the diagnosis and the plan were made once, by the fleet, and re-reasoning
+    them because a person took five minutes would answer a different question than the one that
+    was asked. Which is why no model runs here except the Verification Agent, and only on the
+    approve path.
+
+    **A new root span, the same incident id.** The park's own trace belongs to a process that
+    may be days gone -- and the trace UI's span buffer is in-process, so a resumed leg attached
+    to a dead trace would render as a fragment with no parent, which is the opposite of what
+    §8.2 needs. It opens `telemetry.incident()` with the three wake-on-event facts the parked
+    record carried, so the two legs join on `incident_id`, and the parked `trace_id` is the
+    pointer back (`ADR-032` §6).
+
+    **A fresh clock, deliberately.** `now` defaults to real wall time rather than the parked
+    incident's frozen one. A post-state measured after a park did not happen at trigger time,
+    and §2.2's novelty check compares `(source_id, observed_at)` pairs -- backdating it is the
+    same defect `_Scratch.observed_at` already carries a comment about (item 20).
+
+    Denials stop here and are recorded. Approvals go on to `executor.execute()`, which
+    re-checks the signature `gateway.resolve()` just produced, and then to the same `_resolve`
+    every other verification runs through: a resumed incident learns on exactly the terms
+    §7.2 sets for every other one, or it is not the same loop.
+    """
+    now = now or datetime.now(UTC)
+    approvals.check_approver(approver)
+    record = await approvals.get(approval_id, client=client)
+    if record.state != "PARKED":
+        raise approvals.ApprovalNotPending(
+            f"{approvals.COLLECTION}/{approval_id}: already {record.state}"
+        )
+
+    scratch = _Scratch()
+    scratch.approval = record
+    # The stored signal is a plain string on the way out of Firestore, and `telemetry.incident()`
+    # takes the closed vocabulary. Checking it rather than casting is the posture the telemetry
+    # module's own `_enum()` takes: a stored value outside the vocabulary is a malformed record,
+    # not something to coerce into the nearest legal word.
+    if record.trigger_signal not in get_args(TriggerSignal):
+        raise approvals.ApprovalError(
+            f"{approvals.COLLECTION}/{approval_id}: unknown trigger_signal "
+            f"{record.trigger_signal!r}"
+        )
+    signal = cast(TriggerSignal, record.trigger_signal)
+    with telemetry.incident(
+        incident_id=record.incident_id,
+        trigger_target=record.trigger_target,
+        trigger_signal=signal,
+    ) as recorder:
+        recorder.set_routing(domain=record.domain, routed_to=record.routed_to)
+
+        # The gateway, again and from scratch: `resolve()` re-validates the stored proposal and
+        # recomputes §4.2 rather than reading either back. `scratch.validated` is therefore the
+        # gateway's Action, not one this function parsed -- there is still exactly one place a
+        # proposal becomes an action anyone may act on.
+        decision = await gateway.resolve(
+            record.proposal,
+            subject=record.subject,
+            verdict=verdict,
+            approver=approver,
+            now=now,
+            client=client,
+        )
+        scratch.decision = decision
+        scratch.outcome = _OUTCOME_FOR[decision.outcome]
+        try:
+            scratch.validated = action.validate(record.proposal)
+        except action.ActionError:
+            scratch.validated = None  # a schema denial above; there is nothing to execute
+
+        # §6.4's ledger, on **both** verdicts, which is where a resumed incident departs from
+        # item 15's rule and why: "previously authorized" excluded a held action because nobody
+        # had been asked, and a human answering is the case that exclusion was never about.
+        # The row cites the entity beliefs the *parked* recall resolved (item 16), so a later
+        # retraction still finds an action a human approved days after the fleet proposed it.
+        if scratch.validated is not None:
+            try:
+                await audit.record(
+                    agent_id=PLANNER_ID,
+                    action_class=scratch.validated.action_class,
+                    target=scratch.validated.target,
+                    outcome=decision.outcome,
+                    subject=decision.subject,
+                    signature=decision.signature,
+                    belief_ids=record.entity_ids,
+                    approver=approver,
+                    now=now,
+                    client=client,
+                )
+            except audit.AuditError as error:
+                # §7.3, and item 15's reasoning unchanged: an authorization nothing recorded is
+                # one no retraction can ever flag. The park stays PARKED so the human can answer
+                # again once the ledger is writable.
+                scratch.reasons.append(f"{type(error).__name__}: {error}")
+                recorder.set_outcome(outcome="ESCALATED", malformed_attempts=0, predicate_id=None)
+                return _result(record.incident_id, scratch)
+
+        if decision.outcome in executor.APPROVING and scratch.validated is not None:
+            await _execute_and_learn(
+                scratch,
+                record,
+                model_verification=model_verification or models.VERIFICATION,
+                now=now,
+                client=client,
+            )
+
+        # Terminal last: until this lands the record is still answerable, which is the right
+        # way round. A resolved park whose action never ran would be an action nobody can
+        # authorize any more, and §7.3 has no row for that.
+        scratch.approval = await approvals.resolve(
+            record.id,
+            state="APPROVED" if verdict == "approve" else "DENIED",
+            approver=approver,
+            now=now,
+            client=client,
+        )
+        recorder.set_outcome(
+            outcome=scratch.outcome,
+            malformed_attempts=0,
+            predicate_id=(
+                None if scratch.validated is None else action.predicate_id(scratch.validated)
+            ),
+        )
+    return _result(record.incident_id, scratch)
+
+
+async def _execute_and_learn(
+    scratch: _Scratch,
+    record: approvals.Approval,
+    *,
+    model_verification: str | object,
+    now: datetime,
+    client: Any | None,
+) -> None:
+    """The approved tail of the loop: execute, read the post-state, verify, learn.
+
+    The same steps `run_incident()`'s `execute` and `resolve` nodes take, through the same
+    functions and the same Verification Agent -- built from `verification.build()` and run by
+    an ADK `Runner`, so the resumed leg emits the same `reasoning.chain` span the first leg
+    would have. A two-node graph rather than a rebuilt five-node one: the graph's job is
+    routing, and an approved action has exactly one path left through it (`ADR-032` §7).
+
+    §7.3's rows are the ones the `execute` node already has. An execution that failed verifies
+    nothing; an ambiguous post-state, or a Verification Agent that errored, is `INCONCLUSIVE`
+    and writes no belief -- which is `_resolve(scratch, None, ...)`, exactly as `run_incident()`
+    does for an agent that raised.
+    """
+    assert scratch.validated is not None and scratch.decision is not None
+    try:
+        scratch.execution = await executor.execute(
+            scratch.validated, scratch.decision, client=client
+        )
+        scratch.post_state = await executor.read_state(scratch.validated.target, client=client)
+        scratch.observed_at = now
+    except executor.ExecutionError as error:
+        scratch.outcome = "ESCALATED"
+        scratch.reasons.append(f"{type(error).__name__}: {error}")
+        return
+
+    verification_agent = verification.build(
+        model_verification, agent_id=VERIFICATION_ID, agent_version=VERIFICATION_VERSION
+    )
+
+    async def resolve_node(ctx: Context, verification: dict[str, Any]) -> None:
+        """`run_incident()`'s `resolve` node minus item 20's retry edge, which a resume has no
+        room for: a re-plan would need the Planner, and the Planner's proposal is what the
+        human answered. A `REFUTED` resume escalates, which is where the retry budget ends up
+        anyway."""
+        await _resolve(
+            scratch,
+            verification,
+            model=_reasoning.model_name(verification_agent),
+            domain=record.domain,
+            agent_id=record.routed_to,
+            now=now,
+            client=client,
+        )
+        ctx.route = "DONE"
+
+    if scratch.execution.verification_ambiguous:
+        # §7.3's "executed and never verified" row, reached the way the `execute` node reaches
+        # it: measurements that settle nothing are not a question worth a model call.
+        await _resolve(
+            scratch,
+            None,
+            model=str(model_verification),
+            domain=record.domain,
+            agent_id=record.routed_to,
+            now=now,
+            client=client,
+        )
+        return
+
+    graph = Workflow(
+        name="incident_resume",  # ADK requires a Python identifier; `build_graph()`'s is "incident"
+        edges=[
+            (START, verification_agent),
+            (verification_agent, resolve_node),
+            (resolve_node, {"DONE": _halt}),
+        ],
+    )
+    sessions = InMemorySessionService()
+    await sessions.create_session(
+        app_name=_APP,
+        user_id=record.incident_id,
+        session_id=record.id,
+        # Exactly what §5.8's instruction interpolates, and nothing else: the resumed leg has
+        # no diagnosis, no plan and no recall to seed, because none of them runs again.
+        state={
+            "trigger_target": record.trigger_target,
+            "trigger_observed_value": record.trigger_observed_value,
+            "success_predicate": scratch.validated.success_predicate,
+            "post_error_rate": scratch.post_state.error_rate,
+            "post_config_version": scratch.post_state.config_version,
+        },
+    )
+    runner = Runner(node=graph, app_name=_APP, session_service=sessions)
+    try:
+        async for _ in runner.run_async(
+            user_id=record.incident_id,
+            session_id=record.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=record.trigger_signal)]),
+        ):
+            pass
+    except Exception as error:  # noqa: BLE001 -- `run_incident()`'s reasoning, unchanged
+        scratch.reasons.append(f"{type(error).__name__}: {error}")
+    if scratch.verification is None:
+        # §7.3: "verification agent errors/timeouts -> treated as INCONCLUSIVE". An executed
+        # action that reaches the end with no verification span would read as one nobody checked.
+        await _resolve(
+            scratch,
+            None,
+            model=str(model_verification),
+            domain=record.domain,
+            agent_id=record.routed_to,
+            now=now,
+            client=client,
+        )
+
+
+def _halt() -> None:
+    """The resume graph's terminal node. `build_graph()`'s `halt` is the same thing, scoped."""
+
+
+def _result(incident_id: str, scratch: _Scratch) -> IncidentResult:
+    """One `_Scratch` as the frozen result both public coroutines return."""
     return IncidentResult(
         incident_id=incident_id,
         outcome=scratch.outcome,
@@ -909,4 +1206,5 @@ async def run_incident(
         execution=scratch.execution,
         verification=scratch.verification,
         belief=scratch.belief,
+        approval_id=None if scratch.approval is None else scratch.approval.id,
     )

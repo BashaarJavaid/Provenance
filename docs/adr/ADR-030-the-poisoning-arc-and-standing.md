@@ -90,7 +90,7 @@ the demo script says so out loud rather than eliding it.
 **Revisit when:** a human reinstatement path lands in the product (ADR-018's clause, now also
 ADR-030's — the script's direct window write becomes a product decision); item 29's Sweeper
 writes `UNKNOWN(stale)`, at which point the panel may want to show what a stale belief did to an
-agent's authority; item 30's approval queue gives the held `ROLLBACK_CONFIG` somewhere to park,
+agent's authority; item 30's approval queue gave the held `ROLLBACK_CONFIG` somewhere to park and a human to answer it ([`ADR-032`](./ADR-032-the-approval-queue.md)) — and `DEGRADED` deliberately does not block that answer, or the queue entry this arc creates could never be cleared,
 making the gateway half of this arc a resumable incident rather than a scripted `authorize()`;
 or a source class with weight 0.00 is added for some reason other than being unverifiable, at
 which point reason 2's filter is answering a question nobody asked it.

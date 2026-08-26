@@ -122,6 +122,27 @@ def authorize(
     )
 
 
+def resolve(
+    proposal: object,
+    *,
+    subject: str = "remediation-planner@v1|ROLLBACK_CONFIG|inventory-api",
+    verdict: gateway.HumanVerdict = "approve",
+    approver: str = "dana.ruiz",
+    store: FakeFirestore | None = None,
+    now: datetime = T0,
+) -> gateway.Decision:
+    return asyncio.run(
+        gateway.resolve(
+            proposal,
+            subject=subject,
+            verdict=verdict,
+            approver=approver,
+            now=now,
+            client=store if store is not None else a_store(),
+        )
+    )
+
+
 def _only(exporter: InMemorySpanExporter) -> ReadableSpan:
     finished = exporter.get_finished_spans()
     assert len(finished) == 1
@@ -529,6 +550,10 @@ def test_the_reason_vocabulary_is_closed_and_every_value_is_reachable() -> None:
             (a_rollback(), a_store(), T0),
         )
     }
+    # Item 30's two are `resolve()`'s and are unreachable through `authorize()` by construction:
+    # no proposal, no credential and no standing produces them, because they report what a
+    # person decided rather than what a check found.
+    reached |= {resolve(a_rollback(), verdict=verdict).reason for verdict in ("approve", "deny")}
     assert reached == set(get_args(gateway.DecisionReason))
 
 
@@ -549,9 +574,12 @@ def test_no_function_here_returns_an_optional_decision() -> None:
             assert not (gateway.Decision in args and type(None) in args), name
 
 
-def test_authorize_is_the_only_public_entry_point() -> None:
-    # §1.1 #1: "the gateway is architecturally the only path". A second public coroutine here
-    # would be a second door, and the whole security story rests on there being one.
+def test_the_gateway_has_exactly_two_public_doors() -> None:
+    # §1.1 #1: "the gateway is architecturally the only path". The property is about this
+    # *module* being the only path, not about it answering only one question -- the Policy
+    # Engine has three doors on the same reasoning (item 29). What this test forbids is a
+    # third arriving without the documents that justify it, which is how a second path gets
+    # built by accident. Item 30 added `resolve()`; `docs/adr/ADR-032` says why.
     public = {
         name
         for name, fn in vars(gateway).items()
@@ -559,4 +587,157 @@ def test_authorize_is_the_only_public_entry_point() -> None:
         and fn.__module__ == gateway.__name__
         and not name.startswith("_")
     }
-    assert public == {"authorize"}
+    assert public == {"authorize", "resolve"}
+
+
+# --- item 30: the second door -----------------------------------------------------------------
+
+
+def test_a_human_approval_is_an_approve_at_the_human_stage() -> None:
+    decision = resolve(a_rollback(), verdict="approve")
+    assert (decision.outcome, decision.stage, decision.reason) == (
+        "APPROVE",
+        "human",
+        "HUMAN_APPROVED",
+    )
+    gateway.verify_decision(decision, gateway.public_key_pem())
+
+
+def test_a_human_denial_is_a_deny_at_the_human_stage() -> None:
+    decision = resolve(a_rollback(), verdict="deny")
+    assert (decision.outcome, decision.stage, decision.reason) == (
+        "DENY",
+        "human",
+        "HUMAN_DENIED",
+    )
+    gateway.verify_decision(decision, gateway.public_key_pem())
+
+
+def test_a_resolved_score_11_action_still_scores_11() -> None:
+    # The whole point of recomputing rather than reading back: the arithmetic a human is shown
+    # on approval is the same arithmetic the table produced when it held the action.
+    decision = resolve(
+        a_disable(), subject="remediation-planner@v1|DISABLE_COMPLIANCE_CHECKS|SUP-042"
+    )
+    assert decision.score is not None
+    components = (
+        decision.score.base,
+        decision.score.criticality,
+        decision.score.blast,
+        decision.score.irreversibility,
+    )
+    assert (components, decision.score.score) == ((4, 2, 2, 3), 11)
+
+
+def test_a_denial_carries_the_arithmetic_too() -> None:
+    # §4.2's DEGRADED note applied to item 31: the card renders the breakdown for everything a
+    # human was asked about, and being asked is what a denial means.
+    decision = resolve(a_rollback(), verdict="deny")
+    assert decision.score is not None and decision.score.score == 2
+
+
+def test_the_verdict_never_reaches_the_arithmetic() -> None:
+    approved = resolve(a_rollback(), verdict="approve")
+    denied = resolve(a_rollback(), verdict="deny")
+    assert approved.score == denied.score
+
+
+def test_a_tampered_proposal_dies_at_schema_rather_than_being_waved_through() -> None:
+    # The parked record is an input, never a conclusion, and re-running stage 1 over it is what
+    # makes that structural. Editing `approvals/{id}` to *understate* an action -- a tier-1
+    # org-wide irreversible rollback dressed as the tier-2 reversible one -- does not reach the
+    # risk table at all: §3.1 checks those three fields against an authority that is not the
+    # proposal, so the lie is a schema denial. Which is item 11's validation still standing
+    # between a stored document and an execution, days after the process that stored it died.
+    honest = resolve(a_rollback())
+    assert honest.score is not None and honest.score.score == 2
+    tampered = resolve(a_rollback(target_tier="tier1", blast_radius="org-wide", reversible=False))
+    assert (tampered.outcome, tampered.stage, tampered.reason) == (
+        "DENY",
+        "schema",
+        "SCHEMA_INVALID",
+    )
+    assert tampered.score is None
+
+
+def test_a_tampered_proposal_cannot_inherit_the_parked_subject() -> None:
+    # `subject` is what binds a signature to an action (`_subject`'s docstring). A resume
+    # rebuilds it from the *re-validated* action, keeping only the agent halves, so swapping
+    # the stored proposal for a different action produces a decision that authorizes that
+    # different action by name -- and `executor._check_authorization()` refuses the mismatch.
+    decision = resolve(a_disable(), subject="remediation-planner@v1|ROLLBACK_CONFIG|inventory-api")
+    assert decision.subject == "remediation-planner@v1|DISABLE_COMPLIANCE_CHECKS|SUP-042"
+
+
+def test_a_proposal_that_no_longer_validates_denies_at_schema() -> None:
+    decision = resolve("free-form")
+    assert (decision.outcome, decision.stage, decision.reason) == (
+        "DENY",
+        "schema",
+        "SCHEMA_INVALID",
+    )
+    assert decision.score is None
+
+
+def test_a_human_cannot_approve_for_a_suspended_agent() -> None:
+    # §3.4: standing is losable, and a park is exactly the window in which it can be lost.
+    decision = resolve(a_rollback(), store=a_store(standing="SUSPENDED"), verdict="approve")
+    assert (decision.outcome, decision.stage, decision.reason) == (
+        "DENY",
+        "registry",
+        "STANDING_SUSPENDED",
+    )
+
+
+def test_a_degraded_agent_can_still_be_approved_for() -> None:
+    # DEGRADED is what *caused* the hold (§3.4). If it also blocked the resume, the queue
+    # item 28's arc parks could never be answered at all.
+    decision = resolve(a_rollback(), store=a_store(standing="DEGRADED"), verdict="approve")
+    assert decision.outcome == "APPROVE"
+
+
+def test_an_agent_rotated_during_the_park_denies_at_identity() -> None:
+    decision = resolve(a_rollback(), store=a_store(version="v2"))
+    assert (decision.outcome, decision.stage, decision.reason) == (
+        "DENY",
+        "identity",
+        "CREDENTIAL_INVALID",
+    )
+
+
+def test_an_unreadable_registry_denies_rather_than_approving() -> None:
+    # §7.3, and §1.1 property 4: a resume is a request, so it reads the registry, so it has to
+    # answer for the read failing. Approving because the check could not run is the one wrong
+    # answer this door can give.
+    store = FakeFirestore({}, error=ServiceUnavailable("down"))
+    decision = resolve(a_rollback(), store=store, verdict="approve")
+    assert (decision.outcome, decision.reason) == ("DENY", "REGISTRY_UNAVAILABLE")
+
+
+def test_an_unregistered_agent_denies_a_resolution_too() -> None:
+    decision = resolve(a_rollback(), store=FakeFirestore({}))
+    assert (decision.outcome, decision.reason) == ("DENY", "AGENT_NOT_REGISTERED")
+
+
+def test_a_resolution_emits_one_decision_span_carrying_the_human_stage(
+    spans: InMemorySpanExporter,
+) -> None:
+    decision = resolve(a_rollback())
+    span = _only(spans)
+    # Literal keys, as every other assertion in this file: a rename must fail the build.
+    assert span.name == "provenance.authorization.decision"
+    attrs = dict(span.attributes or {})
+    assert attrs["provenance.decision.stage"] == "human"
+    assert attrs["provenance.decision.reason"] == "HUMAN_APPROVED"
+    assert attrs["provenance.decision.signature"] == decision.signature
+    assert attrs["provenance.risk.score"] == 2
+    # §8.1 admits identifiers, hashes, enums and numbers. The approver is not on the span for
+    # the same reason no other free string is: this shape's attribute set is closed.
+    assert not any("approver" in key for key in attrs)
+
+
+def test_a_human_denial_marks_the_span_an_error_the_way_any_deny_does(
+    spans: InMemorySpanExporter,
+) -> None:
+    resolve(a_rollback(), verdict="deny")
+    assert _only(spans).status.status_code.name == "ERROR"

@@ -208,6 +208,28 @@ Inject the fault first if you want the rollback to have something to fix
 **superseding version** of the belief rather than being refused — v1 is left exactly as it
 was written, and v2 links back to it.
 
+**Answer a held action** — the human approval path (§2.1 stage 7). An action the risk table
+scores 7 or higher, or one proposed by a `DEGRADED` agent, is **held**: nothing executes, and
+the incident parks in a queue that outlives the process holding it. See what is waiting, then
+answer it:
+
+```bash
+curl https://provenance-808273007560.us-central1.run.app/approvals            # open, no token
+curl -X POST https://provenance-808273007560.us-central1.run.app/approvals/appr-... \
+  -H 'Content-Type: application/json' -H "X-Provenance-Token: ${PROVENANCE_TRIGGER_TOKEN}" \
+  -d '{"verdict":"approve","approver":"dana.ruiz"}'
+```
+
+Reading the queue needs no token; answering uses the same one as `/trigger`, because a resume
+runs the Verification Agent and so spends model tokens. On `approve` the incident picks up
+exactly where it stopped — execute, verify, learn — on a fresh clock, days later if that is how
+long the human took. On `deny` nothing executes and the refusal is signed into the same ledger
+an approval goes to, carrying the name of whoever gave it. **Nothing auto-approves on timeout**,
+and a verdict is accepted once: a second `POST` answers 409. The gateway does not trust the
+parked record — it re-validates the proposal, re-reads the agent's standing and recomputes the
+risk arithmetic before it signs anything, so an action whose agent was suspended during the
+park is denied whatever the human says.
+
 **Seed the synthetic company** — the entity model every incident recurs over:
 
 ```bash

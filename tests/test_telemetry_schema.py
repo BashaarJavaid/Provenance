@@ -10,6 +10,7 @@ module's own constants would pass a rename straight through; the point is to cat
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from typing import get_args
 
 import pytest
 from conftest import attach_exporter
@@ -759,3 +760,68 @@ def test_the_buffer_holds_only_provenance_shapes(buffer: telemetry._SpanBuffer) 
         rec.set_outcome(outcome="RESOLVED", malformed_attempts=0)
 
     assert [span["name"] for span in buffer.snapshot()] == ["provenance.incident"]
+
+
+# --- item 30: the human stage ------------------------------------------------------------------
+
+
+def test_the_human_stage_is_in_the_vocabulary_and_took_no_new_shape(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 29's `EXPIRE` precedent applied to §2.1 stage 7: a word, not a fifth shape.
+
+    A human's verdict is the same decision the other five stages produce -- one signed and
+    reported -- so it lands on `provenance.authorization.decision` with the same attribute set.
+    A separate shape would make item 31's card and the ledger panel read two streams for one
+    decision.
+    """
+    assert "human" in get_args(telemetry.AuthStage)
+    # The claim is "no new shape", so it is checked against a risk-stage approval rather than
+    # against a copied literal set: if the two ever diverge, this fails without being edited.
+    _emit_authorization()
+    risk_stage = _keys(_only(spans))
+    spans.clear()
+    with telemetry.authorization_decision(
+        agent_id="remediation-planner",
+        agent_version="v3",
+        standing="DEGRADED",
+        action_class="ROLLBACK_CONFIG",
+        target="inventory-api",
+        target_tier="tier2",
+        blast_radius="single-service",
+        reversible=True,
+        evidence_ids=("obs-error-rate",),
+    ) as rec:
+        rec.set_risk(base=1, criticality=1, blast=0, irreversibility=0, score=2)
+        rec.set_outcome(
+            outcome="APPROVE", stage="human", reason="HUMAN_APPROVED", signature="ecdsa:h"
+        )
+    span = _only(spans)
+    assert span.name == "provenance.authorization.decision"
+    assert _keys(span) == risk_stage
+    assert span.attributes is not None
+    assert span.attributes["provenance.decision.stage"] == "human"
+    assert span.status.status_code is StatusCode.OK
+
+
+def test_a_human_denial_is_an_error_the_way_every_deny_is(spans: InMemorySpanExporter) -> None:
+    # `_ERROR_OUTCOMES` keys off the outcome, not the reason, so item 30 needed no rule of its
+    # own here -- and this test is what says that is still true.
+    with telemetry.authorization_decision(
+        agent_id="remediation-planner", agent_version="v3"
+    ) as rec:
+        rec.set_outcome(outcome="DENY", stage="human", reason="HUMAN_DENIED", signature="ecdsa:h")
+    assert _only(spans).status.status_code is StatusCode.ERROR
+
+
+def test_the_human_stage_is_still_a_closed_vocabulary(spans: InMemorySpanExporter) -> None:
+    with (
+        pytest.raises(ValueError, match="provenance.decision.stage"),
+        telemetry.authorization_decision(agent_id="a", agent_version="v1") as rec,
+    ):
+        rec.set_outcome(
+            outcome="APPROVE",
+            stage="dana",  # type: ignore[arg-type]
+            reason="HUMAN_APPROVED",
+            signature="ecdsa:h",
+        )

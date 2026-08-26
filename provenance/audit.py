@@ -11,7 +11,8 @@ So this is the durable record: one document per authorized action, citing the be
 informed it.
 
     authorizations/auth-3f2b1c…  { id, agent_id, action_class, target, outcome, subject,
-                                    signature, decided_at, belief_ids: [...], flagged_by: [] }
+                                    signature, decided_at, belief_ids: [...], flagged_by: [],
+                                    approver }
 
 Three things follow from it that are worth stating before changing anything:
 
@@ -23,9 +24,13 @@ Three things follow from it that are worth stating before changing anything:
   than a rule to remember. The alternative to this collection — flagging by `target ==
   entity` and a time window, with no stored link at all — would flag actions that merely
   touched the same entity, which is a different and weaker claim than the one §6.4 makes.
-- **Only *authorized* actions are recorded.** §6.4 says "previously authorized". A HELD
-  action parked on a human and a DENIED one never happened; neither rests on a belief in the
-  way that needs reviewing. `incident.py` records approvals only.
+- **Only *authorized* actions are recorded — and item 30 corrected what that excludes.**
+  §6.4 says "previously authorized", so an agent-stage denial and an action still parked on a
+  human are both absent: neither happened, and neither rests on a belief in the way that needs
+  reviewing. A **human's** verdict is the opposite case and is recorded on both sides. Somebody
+  was asked and answered, which is precisely what a ledger is for, and the item's own line
+  ("denial is signed into the ledger") asks for it. That is the `approver` field below, and
+  `docs/adr/ADR-019` §9 carries the correction.
 - **`flag()` is the one `update()` in the memory subsystem, and it is deliberately not in
   `beliefs.py`.** An authorization record is not a belief: §6's append-only rule is about
   what the organization believes, and marking an already-written record for human review
@@ -79,6 +84,10 @@ class Authorization:
     decided_at: str
     belief_ids: tuple[str, ...]
     flagged_by: tuple[dict[str, Any], ...] = ()
+    # Empty on every row an agent's own proposal produced, and set only by item 30's resume.
+    # `agent_id` stays the proposer either way: the record is about whose action this was, and
+    # `approver` is about who answered for it.
+    approver: str = ""
 
 
 class AuditError(Exception):
@@ -130,6 +139,7 @@ def to_document(entry: Authorization) -> dict[str, Any]:
         "decided_at": entry.decided_at,
         "belief_ids": list(entry.belief_ids),
         "flagged_by": list(entry.flagged_by),
+        "approver": entry.approver,
     }
 
 
@@ -149,6 +159,7 @@ def from_document(doc_id: str, data: dict[str, Any] | None) -> Authorization:
             decided_at=data["decided_at"],
             belief_ids=tuple(data["belief_ids"]),
             flagged_by=tuple(data.get("flagged_by", ())),
+            approver=data.get("approver", ""),
         )
     except (KeyError, TypeError) as exc:
         raise AuditError(f"{COLLECTION}/{doc_id}: malformed authorization ({exc})") from exc
@@ -164,6 +175,7 @@ async def record(
     signature: str,
     belief_ids: Sequence[str],
     now: datetime,
+    approver: str = "",
     client: Any | None = None,
 ) -> Authorization:
     """Write one authorized action to the ledger. Create-if-absent, never a rewrite.
@@ -182,6 +194,7 @@ async def record(
         signature=signature,
         decided_at=now.astimezone(UTC).strftime(TIMESTAMP),
         belief_ids=tuple(belief_ids),
+        approver=approver,
     )
     try:
         await _db(client).collection(COLLECTION).document(entry.id).create(to_document(entry))

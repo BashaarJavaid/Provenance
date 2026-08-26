@@ -17,10 +17,19 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from google.api_core.exceptions import ServiceUnavailable
 from test_registry import FakeFirestore
 
 from provenance import app as app_module
-from provenance import beliefs, incident, policy, registry, sweeper, telemetry
+from provenance import (
+    approvals,
+    beliefs,
+    incident,
+    policy,
+    registry,
+    sweeper,
+    telemetry,
+)
 from provenance.app import app
 
 
@@ -481,3 +490,182 @@ def test_an_unreadable_registry_is_503_and_not_an_all_good_panel(
         response = client.get("/registry")
     assert response.status_code == 503
     assert response.json() != []
+
+
+# --- the approval queue, item 30 -----------------------------------------------------------
+
+
+A_PARKED = approvals.Approval(
+    id="appr-3f2b1c",
+    incident_id="inc-abc123",
+    state="PARKED",
+    proposal={"action_class": "ROLLBACK_CONFIG", "target": "inventory-api"},
+    subject="remediation-planner@v3|ROLLBACK_CONFIG|inventory-api",
+    held_signature="ecdsa:deadbeef",
+    entity_ids=("belief-inventory-api",),
+    domain="infrastructure",
+    routed_to="sre-infra-agent",
+    trigger_target="inventory-api",
+    trigger_signal="error_rate",
+    trigger_observed_value=0.38,
+    trace_id="9a0b237f4f576fc4da35e4e76bd0ee03",
+    parked_at="2026-08-26T12:00:00Z",
+)
+
+
+@pytest.fixture
+def queue(monkeypatch: pytest.MonkeyPatch) -> FakeFirestore:
+    fake = FakeFirestore({}, approvals={A_PARKED.id: approvals.to_document(A_PARKED)})
+    monkeypatch.setattr(approvals, "_default_client", lambda: fake)
+    return fake
+
+
+def test_the_approval_queue_is_readable_without_a_token(queue: FakeFirestore) -> None:
+    """Item 36's cold judge has to see what the fleet is holding before being handed a secret.
+
+    Open for the reason the other three reads are: a read spends nothing, and a parked record
+    describes an action the fleet has *not* taken and may not take without an answer.
+    """
+    with TestClient(app) as client:
+        response = client.get("/approvals")
+    assert response.status_code == 200
+    [record] = response.json()
+    assert record["id"] == A_PARKED.id
+    assert record["state"] == "PARKED"
+    # Item 31's card renders from this, and §8.1 keeps the content it needs off spans.
+    assert record["proposal"]["action_class"] == "ROLLBACK_CONFIG"
+    assert record["entity_ids"] == ["belief-inventory-api"]
+
+
+def test_an_unreadable_queue_is_a_503_rather_than_an_empty_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§7.3, and `/registry`'s reasoning: telling a human nothing needs them is the wrong answer."""
+    fake = FakeFirestore({}, error=ServiceUnavailable("down"), approvals={})
+    monkeypatch.setattr(approvals, "_default_client", lambda: fake)
+    with TestClient(app) as client:
+        assert client.get("/approvals").status_code == 503
+
+
+def test_a_verdict_is_refused_without_the_shared_secret(
+    monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore
+) -> None:
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+    body = {"verdict": "approve", "approver": "dana.ruiz"}
+    with TestClient(app) as client:
+        assert client.post(f"/approvals/{A_PARKED.id}", json=body).status_code == 403
+        assert (
+            client.post(
+                f"/approvals/{A_PARKED.id}", json=body, headers={"X-Provenance-Token": "wrong"}
+            )
+        ).status_code == 403
+    assert queue.collections["approvals"][A_PARKED.id]["state"] == "PARKED"
+
+
+def test_a_verdict_fails_closed_when_the_service_was_deployed_without_a_token(
+    monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore
+) -> None:
+    monkeypatch.delenv(app_module.TRIGGER_TOKEN_ENV, raising=False)
+    with TestClient(app) as client:
+        response = client.post(
+            f"/approvals/{A_PARKED.id}",
+            json={"verdict": "approve", "approver": "dana.ruiz"},
+            headers={"X-Provenance-Token": "anything"},
+        )
+    assert response.status_code == 403
+
+
+def test_a_verdict_outside_the_closed_pair_never_reaches_the_loop(
+    monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore
+) -> None:
+    """The default that would otherwise apply is the dangerous one, so there is no default."""
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+    called = False
+
+    async def fail(*args: object, **kwargs: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(app_module.incident, "resume", fail)
+    with TestClient(app) as client:
+        response = client.post(
+            f"/approvals/{A_PARKED.id}",
+            json={"verdict": "maybe", "approver": "dana.ruiz"},
+            headers={"X-Provenance-Token": "s3cret"},
+        )
+    assert response.status_code == 422
+    assert not called
+
+
+def test_an_authorized_verdict_returns_what_the_resumed_leg_did(
+    monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore
+) -> None:
+    """The route's own contract: it reports the resolution, it does not make one."""
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+    seen: dict[str, Any] = {}
+
+    async def resumed(approval_id: str, **kwargs: Any) -> incident.IncidentResult:
+        seen.update({"approval_id": approval_id, **kwargs})
+        return incident.IncidentResult(
+            incident_id="inc-abc123",
+            outcome="DENIED",
+            decision=None,
+            action=None,
+            malformed_attempts=0,
+            approval_id=approval_id,
+        )
+
+    monkeypatch.setattr(app_module.incident, "resume", resumed)
+    with TestClient(app) as client:
+        response = client.post(
+            f"/approvals/{A_PARKED.id}",
+            json={"verdict": "deny", "approver": "dana.ruiz"},
+            headers={"X-Provenance-Token": "s3cret"},
+        )
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "DENIED"
+    assert seen == {
+        "approval_id": A_PARKED.id,
+        "verdict": "deny",
+        "approver": "dana.ruiz",
+    }
+
+
+def test_an_absent_approval_is_a_404(monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore) -> None:
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+    with TestClient(app) as client:
+        response = client.post(
+            "/approvals/appr-nothing",
+            json={"verdict": "approve", "approver": "dana.ruiz"},
+            headers={"X-Provenance-Token": "s3cret"},
+        )
+    assert response.status_code == 404
+
+
+def test_an_already_answered_approval_is_a_409(
+    monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore
+) -> None:
+    """A retried POST reads as the no-op it is, not as something worth retrying again."""
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+    queue.collections["approvals"][A_PARKED.id]["state"] = "DENIED"
+    with TestClient(app) as client:
+        response = client.post(
+            f"/approvals/{A_PARKED.id}",
+            json={"verdict": "approve", "approver": "dana.ruiz"},
+            headers={"X-Provenance-Token": "s3cret"},
+        )
+    assert response.status_code == 409
+
+
+def test_an_approver_that_is_not_an_identifier_is_a_400(
+    monkeypatch: pytest.MonkeyPatch, queue: FakeFirestore
+) -> None:
+    monkeypatch.setenv(app_module.TRIGGER_TOKEN_ENV, "s3cret")
+    with TestClient(app) as client:
+        response = client.post(
+            f"/approvals/{A_PARKED.id}",
+            json={"verdict": "approve", "approver": "not an identifier"},
+            headers={"X-Provenance-Token": "s3cret"},
+        )
+    assert response.status_code == 400
+    assert queue.collections["approvals"][A_PARKED.id]["state"] == "PARKED"
