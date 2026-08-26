@@ -66,6 +66,8 @@ OBSERVED_VALUE = 14.0
 EXPECTED_COMPONENTS = (4, 2, 2, 3)
 EXPECTED_SCORE = 11
 
+REASONING_STEPS = ("classification", "diagnosis", "planning")
+
 POLL_ATTEMPTS = 24
 POLL_INTERVAL_S = 10.0
 
@@ -212,8 +214,13 @@ def attribute(labels: dict[str, str], attr: str) -> str | None:
     return labels.get(f"/{attr}") or labels.get(attr)
 
 
-def check_spans(spans: list[Any]) -> int:
-    """What a held supply-chain incident must and must not have left in the audit stream."""
+def check_spans(spans: list[Any], *, expected_steps: tuple[str, ...] = REASONING_STEPS) -> int:
+    """What a held supply-chain incident must and must not have left in the audit stream.
+
+    `expected_steps` exists so item 27 can assert the same trace against a four-step run
+    without a second copy of the eighty lines below -- its incident carries `raw_content`, so
+    the sanitizer's chain joins these three. Item 21's own run keeps the default.
+    """
     failures = 0
 
     def fail(message: str) -> None:
@@ -251,8 +258,8 @@ def check_spans(spans: list[Any]) -> int:
     chains = by_name.get(telemetry.SPAN_REASONING_CHAIN, [])
     steps = sorted(attribute(dict(s.labels), telemetry.ATTR_REASONING_STEP) or "" for s in chains)
     print(f"--> reasoning steps: {steps}")
-    if steps != ["classification", "diagnosis", "planning"]:
-        fail(f"reasoning steps are {steps}, expected classification/diagnosis/planning")
+    if steps != sorted(expected_steps):
+        fail(f"reasoning steps are {steps}, expected {sorted(expected_steps)}")
 
     diagnoses = [
         s for s in chains if attribute(dict(s.labels), telemetry.ATTR_REASONING_STEP) == "diagnosis"

@@ -116,6 +116,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_incident_three.py` — item 24; `--runs N`
 - `scripts/verify_model_armor.py` — item 25; mutates nothing
 - `scripts/verify_sanitizer.py` — item 26; mutates nothing
+- `scripts/verify_injection_arc.py` — item 27; mutates nothing; run `verify_supply_chain.py` alongside it — same trigger without the payload, same 11
 
 Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 
@@ -131,12 +132,12 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–7 done; Phase 8 under way. Items 0.5–26 shipped (Aug 25). **Item 27 (the injection arc) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–7 done; Phase 8 under way. Items 0.5–27 shipped (Aug 25). **Item 28 (the poisoning arc + standing) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
 
 - `seed_registry.py`, `seed_belief.py`, `seed_class_belief.py`, and `setup_model_armor.py` have **no `--reset`**. Don't invent one. A re-run must never rewrite a stored `DEGRADED`, a poisoned-then-defended `SUP-042` chain, the class belief, or a Model Armor template item 27 may tune on camera.
-- `SUP-042`'s chain and `belief-service.tier2` are permanent demo state; items 27/28 attack the first. The class name is the Analyst's — read it out of the store, don't hardcode it. `pricing-api` must stay belief-free.
+- `SUP-042`'s chain and `belief-service.tier2` are permanent demo state; item 28 attacks the first (item 27 ran against it and left it byte-identical). The class name is the Analyst's — read it out of the store, don't hardcode it. `pricing-api` must stay belief-free.
 - `remediation-planner` is at **`v3`**. Read `agent.version` off the record, never hardcode it. Private keys are printed once by `--rotate` and stored nowhere — `PROVENANCE_PLANNER_KEY` is the env var.
 - `scripts/verify_belief_store.py` refuses unless `sre-infra-agent` starts `GOOD` with an empty rejection window. Clearing that window is a human act; the script's teardown writes `rejection_window: []`.
 - `scripts/verify_refuted.py` imports its teardown from `verify_incident_one.py` — two restore paths over one fixture drift. Don't duplicate it.
