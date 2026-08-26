@@ -2077,6 +2077,9 @@ def test_the_resumed_leg_runs_on_a_fresh_clock() -> None:
     result = resume(held.approval_id, store=store)  # no `now`
 
     assert result.belief is not None
+    # The root document's `created_at` is written from the first version's `committed_at`
+    # (`beliefs.py`), which is the stamp this test is about; the fake store holds root
+    # documents in this collection and versions in a subcollection.
     committed = next(
         v for k, v in store.collections[beliefs.COLLECTION].items() if k.endswith("inventory-api")
     )

@@ -325,14 +325,14 @@ async def resume_and_check(
             committed = await beliefs.current(BELIEF_ID, client=client)
             # The whole point of the fresh clock: a post-state measured after a five-minute
             # park did not happen at trigger time, and the stored belief must not say it did.
-            if committed.created_at <= record.parked_at:
+            if committed.committed_at <= record.parked_at:
                 fail(
-                    f"the belief is stamped {committed.created_at}, at or before the park "
+                    f"the belief is stamped {committed.committed_at}, at or before the park "
                     f"({record.parked_at}) -- the resumed leg backdated itself",
                     failures,
                 )
             else:
-                print(f"    committed_at {committed.created_at} > parked_at {record.parked_at}")
+                print(f"    committed_at {committed.committed_at} > parked_at {record.parked_at}")
     else:
         if result.outcome != "DENIED":
             fail(f"a denied resume ended {result.outcome}, expected DENIED", failures)

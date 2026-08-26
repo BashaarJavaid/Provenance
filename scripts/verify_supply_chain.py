@@ -20,11 +20,16 @@ there. That is §4.2's second worked example arrived at by a fleet rather than a
 table-driven test -- the first time in this repo it has been. Nothing executes, so §7.2 permits
 nothing to be learned, and "no belief was written" is checked rather than assumed.
 
-**This script mutates nothing**, which is why it has no `refuse_if_dirty()` and no
-`try/finally` teardown -- the first verify script since item 8 with neither, and the reason is
-that there is no injection to make (the trigger carries the deviation) and no execution to
-undo. What it *does* guard is the opposite: `SUP-042`'s belief chain is read before and after
-and asserted byte-identical. Items 27 and 28 attack that chain and the demo's closing shot is
+**This script mutates nothing it did not clean up**, which is why it has no
+`refuse_if_dirty()`: there is no injection to make (the trigger carries the deviation) and no
+execution to undo. It is not quite the "no teardown at all" script it was through item 29 --
+**item 30 changed that, and the change was found by running this**: a HOLD now writes an
+`approvals/{id}` record, so the score-11 hold this script exists to reach leaves a human a
+question to answer. The `finally` below deletes exactly the record this run parked, by the id
+the result names. Without it every supply-chain run leaves a stranded park, and
+`verify_approval_queue.py` -- which refuses to start on a non-empty queue -- would be blocked
+by its own sibling. What the script *also* guards is the opposite of a teardown: `SUP-042`'s
+belief chain is read before and after and asserted byte-identical. Items 27 and 28 attack that chain and the demo's closing shot is
 that it survived, and this script runs an incident against that very entity -- so a check that
 it left memory alone is the one teardown this script needs.
 
@@ -51,7 +56,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import firestore, trace_v1
 from opentelemetry import trace
 
-from provenance import beliefs, incident, recall, telemetry
+from provenance import approvals, beliefs, incident, recall, telemetry
 from provenance.agents import supply_chain
 
 TARGET = "SUP-042"
@@ -94,6 +99,19 @@ def read_chain(client: firestore.Client) -> list[dict[str, Any]]:
         (snapshot.to_dict() or {} for snapshot in versions.stream()),
         key=lambda d: int(d.get("version", 0)),
     )
+
+
+def delete_parked(client: firestore.Client, approval_id: str | None) -> None:
+    """Item 30: a HOLD parks, so a script that reaches one has to clear up after it.
+
+    By id, never by collection -- `verify_approval_queue.py` deletes the whole collection
+    because it also refuses to start on a non-empty one, and a read-only script has no such
+    licence over somebody else's unanswered hold.
+    """
+    if approval_id is None:
+        return
+    print(f"--> clearing the park this run created: {approvals.COLLECTION}/{approval_id}")
+    client.collection(approvals.COLLECTION).document(approval_id).delete()
 
 
 def check_result(result: incident.IncidentResult) -> int:
@@ -331,6 +349,10 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
             client=async_client,
             planner_key=private_key,
         )
+
+    # Item 30: the score-11 hold parks now. Cleared before the assertions below, which are all
+    # reads -- a failing check must not strand a question in somebody's approval queue.
+    delete_parked(sync_client, result.approval_id)
 
     failures += check_result(result)
 

@@ -34,7 +34,10 @@ span including ADK's own. The `Decision` has no free-text field but `subject`, s
 checked against the registry rather than scanned -- it must name the agent, the action class
 and the target, which is what "cites the arithmetic" means at the object level.
 
-**It mutates nothing** -- there is no injection to make and no execution to undo. What it does
+**It mutates nothing it does not clean up** -- there is no injection to make and no execution
+to undo, but since item 30 the score-11 hold this arc reaches writes an `approvals/{id}`
+record, so `delete_parked()` (shared with `verify_supply_chain.py`, not duplicated) removes
+exactly the one this run parked. What it does
 guard is the opposite: `SUP-042`'s belief chain is read before and after and asserted
 byte-identical, because `CLAUDE.md` names that chain permanent demo state and item 27 is the
 first of the two items that attack it.
@@ -64,6 +67,7 @@ from verify_supply_chain import (
     TARGET,
     check_result,
     check_spans,
+    delete_parked,
     load_private_key,
     read_back,
     read_chain,
@@ -142,6 +146,11 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
             client=async_client,
             planner_key=private_key,
         )
+
+    # Item 30: the hold this arc reaches now parks. Cleared here rather than at the end,
+    # because everything below is a read and a failing assertion must not strand a question
+    # in somebody's approval queue.
+    delete_parked(sync_client, result.approval_id)
 
     # 3/5 -- item 21's assertions, unchanged, over a run the payload reached. This is the
     # whole point of the item: the arithmetic half and the leak half in one trace.
