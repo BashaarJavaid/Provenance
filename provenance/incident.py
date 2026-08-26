@@ -813,6 +813,7 @@ async def run_incident(
     model_verification: str | object = None,
     embed: recall.Embedder | None = None,
     sanitizer_client: Any | None = None,
+    memory: bool = True,
 ) -> IncidentResult:
     """One trigger, one incident, one root span. Never raises on a bad proposal.
 
@@ -828,6 +829,13 @@ async def run_incident(
     index -- unset, it calls Vertex. Everything else the loop needs -- the Planner's
     version and public key -- is read from the registry at request time (§1.1 property 4),
     never from a constant here.
+
+    `memory=False` is item 32's `--memory-disabled` arm: the recall below is skipped and the
+    loop runs against an empty `Recalled`. It disables *reading* memory and nothing else --
+    the belief store is untouched and §2.2's commit at the end still runs, so the two arms
+    differ in exactly one thing and the A/B has one variable. Nothing else in this module
+    branches on it: `_seed_state` already takes a `Recalled`, and `policy.commit()` reads the
+    current version from the store rather than from recall.
     """
     now = now or datetime.now(UTC)
 
@@ -852,18 +860,22 @@ async def run_incident(
     ) as recorder:
         agent = await registry.get_agent(PLANNER_ID, client=client)
         entity = company.described(trigger.target)
-        recalled = await recall.recall(
-            trigger.target,
-            recall.query_text(
-                target=trigger.target,
-                signal=trigger.signal,
-                kind=entity.kind,
-                tier=entity.tier,
-                description=entity.description,
-                observed_value=trigger.observed_value,
-            ),
-            client=client,
-            embed=embed,
+        recalled = (
+            await recall.recall(
+                trigger.target,
+                recall.query_text(
+                    target=trigger.target,
+                    signal=trigger.signal,
+                    kind=entity.kind,
+                    tier=entity.tier,
+                    description=entity.description,
+                    observed_value=trigger.observed_value,
+                ),
+                client=client,
+                embed=embed,
+            )
+            if memory
+            else recall.Recalled()
         )
         scratch.recalled = recalled
         state = _seed_state(trigger, agent.version, recalled, facts)

@@ -95,12 +95,20 @@ def attach(
             "rec": recorder.__enter__(),
             "input_tokens": 0,
             "output_tokens": 0,
+            "model_calls": 0,
         }
 
     def on_response(callback_context: Context, llm_response: LlmResponse) -> None:
         entry = live.get(callback_context.invocation_id)
+        if entry is None:
+            return
+        # Counted before the usage check and not with it (item 32). A response that arrives
+        # without `usage_metadata` still cost a request, and the two facts come apart: a
+        # count folded into the token guard would under-report exactly the responses whose
+        # tokens are already missing, so the A/B's cheapest arm would look cheaper still.
+        entry["model_calls"] += 1
         usage = llm_response.usage_metadata
-        if entry is None or usage is None:
+        if usage is None:
             return
         entry["input_tokens"] += usage.prompt_token_count or 0
         entry["output_tokens"] += usage.candidates_token_count or 0
@@ -115,6 +123,7 @@ def attach(
             selected_hypothesis=str(output.get("selected_hypothesis", "")),
             input_tokens=entry["input_tokens"],
             output_tokens=entry["output_tokens"],
+            model_calls=entry["model_calls"],
         )
         entry["cm"].__exit__(None, None, None)
 

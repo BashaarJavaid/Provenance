@@ -88,6 +88,7 @@ def emit_all() -> str:
                 selected_hypothesis="config_regression",
                 input_tokens=1840,
                 output_tokens=220,
+                model_calls=1,
             )
 
         assert root.get_span_context() is not None

@@ -1,0 +1,45 @@
+{
+  "incident": "incident #2 \u2014 inventory-api error_rate 0.38, with belief-inventory-api v1 already in the store",
+  "runs_per_arm": 3,
+  "statistic": "median",
+  "generated_from": [
+    "run-1-memory-off.json",
+    "run-1-memory-on.json",
+    "run-2-memory-off.json",
+    "run-2-memory-on.json",
+    "run-3-memory-off.json",
+    "run-3-memory-on.json"
+  ],
+  "rows": [
+    {
+      "metric": "wall-clock",
+      "unit": "s",
+      "memory_on": 52.3,
+      "memory_off": 39.0
+    },
+    {
+      "metric": "model calls",
+      "unit": "",
+      "memory_on": 4,
+      "memory_off": 4
+    },
+    {
+      "metric": "input tokens",
+      "unit": "",
+      "memory_on": 2711,
+      "memory_off": 2588
+    },
+    {
+      "metric": "output tokens",
+      "unit": "",
+      "memory_on": 393,
+      "memory_off": 369
+    },
+    {
+      "metric": "hypotheses considered",
+      "unit": "model-asserted",
+      "memory_on": 2,
+      "memory_off": 2
+    }
+  ]
+}

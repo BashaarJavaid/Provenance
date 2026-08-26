@@ -112,6 +112,7 @@ def _emit_reasoning() -> None:
             selected_hypothesis="config_regression",
             input_tokens=1840,
             output_tokens=220,
+            model_calls=1,
         )
 
 
@@ -324,6 +325,7 @@ def test_reasoning_chain_shape(spans: InMemorySpanExporter) -> None:
         "provenance.reasoning.selected_hypothesis",
         "provenance.reasoning.input_tokens",
         "provenance.reasoning.output_tokens",
+        "provenance.reasoning.model_calls",
         "provenance.recall.belief_ids",
         "provenance.recall.nominated_ids",
     }
@@ -608,6 +610,7 @@ def test_nested_shapes_share_one_trace_id(spans: InMemorySpanExporter) -> None:
             selected_hypothesis="config_regression",
             input_tokens=1,
             output_tokens=1,
+            model_calls=1,
         )
     inner, outer_span = spans.get_finished_spans()
     assert inner.context is not None and outer_span.context is not None
@@ -703,6 +706,7 @@ def test_nested_spans_serialize_their_trace_and_parent(buffer: telemetry._SpanBu
                 selected_hypothesis="config_regression",
                 input_tokens=1,
                 output_tokens=1,
+                model_calls=1,
             )
         rec.set_outcome(outcome="RESOLVED", malformed_attempts=0)
 
