@@ -1367,3 +1367,101 @@ def test_a_class_proposal_may_not_bring_its_own_evidence() -> None:
 
     with pytest.raises(ValueError, match="derives its evidence"):
         commit_class(store, ids, evidence=[an_evidence()])
+
+
+# --- item 28: a class that weighs nothing is not corroboration -------------------------------
+
+
+def a_belief_past_the_flip_door(store: FakeFirestore) -> None:
+    """`SUP-042`'s shape in miniature: three accumulated classes, comfortably past 0.70.
+
+    Two commits rather than one because that is how the real chain got there — a status
+    established, then re-confirmed by a further class — and because the poisoning case only
+    exists for a belief whose *accumulated* set already clears the flip door on the strength
+    of the evidence a poisoner is trying to contradict.
+    """
+    commit(store, [a_flagging_evidence(), an_evidence(id="ev-inf", source_class="agent_inference")])
+    commit(store, [a_fortnight_later("third_party_audit", "ev-audit", at=NOW)])
+
+
+def test_a_zero_weight_class_cannot_corroborate_a_flip(spans: InMemorySpanExporter) -> None:
+    """Item 28's arc, and the hole building it exposed.
+
+    §6.3 was a plain set difference, so `unverified_external_claim` — a class weighing 0.00 —
+    counted as "a source_class different from the class that established the current status".
+    The threshold gate cannot catch it either: the 0.00 item adds nothing, so confidence over
+    the accumulated set is whatever the belief already had, and a belief past 0.70 carries the
+    flip that contradicts it. Against the live `SUP-042` chain that computed to 0.7477 and
+    **committed**. The number was never the problem; the corroboration was.
+    """
+    store = a_store()
+    a_belief_past_the_flip_door(store)
+
+    poison = commit(
+        store, [a_fortnight_later("unverified_external_claim", "ev-junk", at=NOW)], status=CLEARED
+    )
+
+    assert (poison.outcome, poison.reason) == ("REJECT", "FLIP_UNSUPPORTED")
+    # Stated rather than implied: this refusal is not the arithmetic doing the work. The
+    # proposal cleared 0.70 and was refused anyway, which is the whole content of the fix.
+    assert poison.confidence >= policy.FLIP_THRESHOLD
+    assert "3" not in store.collections[VERSIONS], "the poisoning wrote a version"
+
+
+def test_a_weighted_new_class_still_flips_the_same_belief(spans: InMemorySpanExporter) -> None:
+    """The control, without which the filter could be refusing every flip and look correct.
+
+    Identical setup, identical shape of proposal — one novel item of a class the chain does
+    not carry — differing only in that this class weighs something. It commits.
+    """
+    store = a_store()
+    a_belief_past_the_flip_door(store)
+
+    honest = commit(
+        store,
+        [a_fortnight_later("verified_system_observation", "ev-sensor", at=NOW)],
+        status=CLEARED,
+    )
+
+    assert (honest.outcome, honest.reason) == ("COMMIT", "ABOVE_THRESHOLD")
+    assert honest.version == 3
+    assert window(store) == [], "an accepted flip cost the agent standing"
+
+
+def test_three_poisoning_attempts_degrade_the_agent_and_the_fourth_write_is_refused() -> None:
+    """§3.4's counter over item 28's reason, and ARCHITECTURE §10's standing row.
+
+    `FLIP_UNSUPPORTED` was already in `COUNTED_REJECTIONS` (item 14), so the fix reaches the
+    counter with nothing in `registry.py` changing: the poisoner is now reported under a
+    counted reason instead of committing. Three distinct claims rather than one repeated, so
+    none of them can be landing as `NO_NEW_EVIDENCE` — a different counted reason that would
+    drive the same counter and prove something else.
+    """
+    store = a_store()
+    a_belief_past_the_flip_door(store)
+
+    for attempt in (1, 2, 3):
+        claim = commit(
+            store,
+            [
+                a_fortnight_later(
+                    "unverified_external_claim",
+                    f"ev-junk-{attempt}",
+                    at=NOW + timedelta(minutes=attempt),
+                )
+            ],
+            status=CLEARED,
+        )
+        assert (claim.outcome, claim.reason) == ("REJECT", "FLIP_UNSUPPORTED")
+        assert len(window(store)) == attempt
+
+    assert [entry["reason"] for entry in window(store)] == ["FLIP_UNSUPPORTED"] * 3
+    assert store.docs["sre-infra-agent"]["standing"] == "DEGRADED"
+
+    # §3.4: "a DEGRADED agent's memory writes are rejected outright" — and the refusal is a
+    # statement about the agent, not about its evidence, so it costs no further standing.
+    ordinary = commit(
+        store, [a_fortnight_later("verified_system_observation", "ev-honest", at=NOW)]
+    )
+    assert (ordinary.outcome, ordinary.reason) == ("REJECT", "STANDING_NOT_GOOD")
+    assert len(window(store)) == 3, "the standing check incremented the counter it reads"

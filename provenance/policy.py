@@ -725,7 +725,17 @@ async def _decide(
     # different from the class that established the current status" — which is the set of
     # classes the version in force rests on, already in hand from stage 3's read. A single
     # sensor cannot both set and clear an alarm, and this is that sentence as a set difference.
-    if flip and not {item.source_class for item in new} - {item.source_class for item in known}:
+    #
+    # The novel side is filtered by weight, which is the qualifier item 28 found missing. A
+    # class contributing 0.00 changes the number by exactly nothing (§4.3), so it is not the
+    # corroboration §6.3 asks for — a class that cannot move the number cannot break the tie
+    # either. Unfiltered, a bare `unverified_external_claim` flips any belief whose accumulated
+    # set already clears 0.70 on the strength of the evidence it is contradicting, which is
+    # exactly the state `SUP-042` is in. `known` is deliberately not filtered: a zero-weight
+    # class already in force fails the plain difference anyway, so filtering it too would be
+    # an inert line that reads as significant.
+    corroborating = {item.source_class for item in new if BASE_WEIGHT[item.source_class] > 0}
+    if flip and not corroborating - {item.source_class for item in known}:
         return _Verdict(
             "REJECT", "FLIP_UNSUPPORTED", conf, agent, version, supersedes, len(new), threshold
         )

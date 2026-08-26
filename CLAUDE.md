@@ -65,10 +65,11 @@ Further conventions:
 - Class beliefs are **advisory only**, and since item 23 that is two mechanisms rather than a rule to remember: `recall.Recalled` keeps them out of `entity_ids`, which is what `authorizations/{id}` cites, and `policy.commit()` refuses `CLASS_BELIEF_NOT_EVIDENCE` when a proposal cites one as evidence. They may reorder hypotheses; they may never authorize an action or serve as evidence for an entity-belief commit. The ledger cites `entity_ids`, never `belief_ids`.
 - Beliefs are append-only: supersession and retraction, never overwrite, never delete. Nothing under `provenance/` modifies or deletes a version. Don't add a `current_version` pointer; `current()` walks `versions/1, 2, …`.
 - Fail-closed is the default posture for any subsystem failure that would silently weaken a guarantee (`ARCHITECTURE.md` §7.3). If unsure whether something should fail open or closed, it's closed.
+- A `source_class` weighing **0.00** corroborates nothing: §6.3's flip test filters its novel side by `BASE_WEIGHT`. This is not tidiness — before item 28 a bare `unverified_external_claim` could overturn any belief already past `FLIP_THRESHOLD`, because a flip is scored over the *accumulated* set and the 0.00 item leaves that number untouched. `BASE_WEIGHT` is therefore load-bearing in two places; adding a class at 0.00 silently makes it unable to corroborate anything.
 - No ML/LLM-based risk scoring — a deliberate constraint (see `docs/adr/ADR-003`), not a gap to fill in later. `risk.BASE` is the only home of `base[action_class]`; a third tool cannot ship without a base score. Don't add a third supplier tool to reach execution — the supply-chain incident ending `HELD` at 11 is the design.
 - PortunusMCP is a library dependency only; all track-facing authorization logic is new code here and must stay visibly so in the commit history (disclosure table in `README.md`, reasoning in `ADR-004`). It installs as a separate `--no-deps` step and **must never go in `pyproject.toml`**. CI must not gate on `pip check`. The Dockerfile's two-step install must stay two steps in that order.
 - Emit spans only through `provenance/telemetry.py` helpers. Don't call the OTel tracer directly, and don't invent a new span shape or a content-bearing attribute key without changing `ARCHITECTURE.md` §8.1 and `tests/test_telemetry_schema.py` together. Attributes carry identifiers, hashes, enums and numbers — never content.
-- `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` is token-guarded and **fails closed when `PROVENANCE_TRIGGER_TOKEN` is unset** — don't remove the guard. `GET /trace` and `GET /belief/{entity}` are unauthenticated on purpose.
+- `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` is token-guarded and **fails closed when `PROVENANCE_TRIGGER_TOKEN` is unset** — don't remove the guard. `GET /trace`, `GET /belief/{entity}` and `GET /registry` are unauthenticated on purpose.
 - Deploy at `--max-instances=1` (the trace UI's span buffer is in-process) and `--min-instances=0`. Don't raise either for convenience.
 - No entity document carries a `status` / `confidence` / `belief` field — `SUP-042` is AT_RISK through the belief store, never as a seeded field. `inventory-api` is tier2 and `SUP-042` is tier1 (the only route to the frozen scores 2 and 11); `pricing-api` has no config history on purpose.
 - Reasoning roles run on `gemini-2.5-pro`; verification on `gemini-3.5-flash`; the item-26 sanitizer on `gemma-4-26b-a4b-it-maas`. Gemini 3.5 Pro is not served to this project. Gemini 3.x lives on the **`global`** endpoint.
@@ -117,6 +118,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_model_armor.py` — item 25; mutates nothing
 - `scripts/verify_sanitizer.py` — item 26; mutates nothing
 - `scripts/verify_injection_arc.py` — item 27; mutates nothing; run `verify_supply_chain.py` alongside it — same trigger without the payload, same 11
+- `scripts/verify_poisoning_arc.py` — item 28; **writes live registry state** and restores it; no model calls
 
 Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 
@@ -132,14 +134,15 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–7 done; Phase 8 under way. Items 0.5–27 shipped (Aug 25). **Item 28 (the poisoning arc + standing) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–8 done. Items 0.5–28 shipped (Aug 25). **Item 29 (the Staleness Sweeper) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
 
 - `seed_registry.py`, `seed_belief.py`, `seed_class_belief.py`, and `setup_model_armor.py` have **no `--reset`**. Don't invent one. A re-run must never rewrite a stored `DEGRADED`, a poisoned-then-defended `SUP-042` chain, the class belief, or a Model Armor template item 27 may tune on camera.
-- `SUP-042`'s chain and `belief-service.tier2` are permanent demo state; item 28 attacks the first (item 27 ran against it and left it byte-identical). The class name is the Analyst's — read it out of the store, don't hardcode it. `pricing-api` must stay belief-free.
+- `SUP-042`'s chain and `belief-service.tier2` are permanent demo state. Items 27 and 28 both attack the first and both left it byte-identical; that is the closing shot, so anything that rewrites it destroys what two items proved. The class name is the Analyst's — read it out of the store, don't hardcode it. `pricing-api` must stay belief-free.
 - `remediation-planner` is at **`v3`**. Read `agent.version` off the record, never hardcode it. Private keys are printed once by `--rotate` and stored nowhere — `PROVENANCE_PLANNER_KEY` is the env var.
 - `scripts/verify_belief_store.py` refuses unless `sre-infra-agent` starts `GOOD` with an empty rejection window. Clearing that window is a human act; the script's teardown writes `rejection_window: []`.
+- `scripts/verify_poisoning_arc.py` refuses unless **both** `supply-chain-agent` and `remediation-planner` start `GOOD` with an empty window, and restores both in a `finally`. Same reason, twice over. Its two halves run on two agents on purpose — the gateway checks `tool_scope` before standing, so the poisoner can never itself reach `STANDING_DEGRADED` (`ADR-030` §4). Don't "simplify" it onto one agent by editing `registry.AGENTS`: `--rotate` copies the **stored** record, so that would not propagate anyway.
 - `scripts/verify_refuted.py` imports its teardown from `verify_incident_one.py` — two restore paths over one fixture drift. Don't duplicate it.
 - The sanitizer runs on **`gemma-4-26b-a4b-it-maas`**, served **only** from the `global` endpoint, and it `429`s on roughly half of all calls — that is `PUBLIC_PREVIEW` shared capacity, not a defect. `sanitizer.SANITIZE_ATTEMPTS` is the answer; re-run rather than raising it. Nothing is deployed and nothing bills while idle, so there is no undeploy step (this replaces the old "Gemma bills while idle" trap — `ADR-028` §1 records why it is gone).
 - The sanitizer's `PLACEHOLDER` check is not tidiness: Gemma has been observed listing the PII it replaced in `pii_tokens`. A token that is not a placeholder **is** PII. Don't relax it to a prompt instruction.

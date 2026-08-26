@@ -30,10 +30,18 @@ clock -- all of it *content*, and §8.1 keeps content off spans on purpose, so t
 structurally cannot serve it. It is unauthenticated for the same reason `/trace` is: a read
 spends nothing. `docs/adr/ADR-021` records the departure; `THREAT_MODEL.md` records what it
 publishes.
+
+`GET /registry` arrived with item 28 and is the second Firestore reader, for the same reason
+the first one exists: §8.2's registry panel renders standing and the `rejection_window` that
+earned it, and both are stored state rather than anything the span buffer can be trusted to
+still hold. It reads at request time and caches nothing -- §1.1 property 4 is the whole point
+of the surface, since what it exists to show is a standing that changed a second ago.
+`public_key` is not served: the panel has no use for it and the route is public.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 from collections.abc import AsyncIterator
@@ -48,7 +56,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from provenance import beliefs, incident, policy, telemetry
+from provenance import beliefs, incident, policy, registry, telemetry
 from provenance.telemetry import TriggerSignal
 
 TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
@@ -144,6 +152,32 @@ async def belief(entity: str) -> dict[str, Any]:
             ],
         },
     }
+
+
+@app.get("/registry")
+async def agents() -> list[dict[str, Any]]:
+    """§8.2's registry panel, read side (item 28). Unauthenticated, like `/trace` and `/belief`.
+
+    Read fresh on every request through `registry.get_agent()` -- §1.1 property 4, and the
+    reason this route exists at all: a panel showing a cached standing would show the state
+    the poisoning arc is about to change rather than the one it just did.
+    """
+    try:
+        records = await asyncio.gather(*(registry.get_agent(a.id) for a in registry.AGENTS))
+    # §7.3, and `/belief`'s reasoning applied to standing: "the registry was unreadable" and
+    # "every agent is in good standing" must not look alike. An empty or all-GOOD panel during
+    # an outage is the one wrong answer this surface is able to give.
+    except registry.RegistryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return [
+        {
+            "id": record.id,
+            "version": record.version,
+            "standing": record.standing,
+            "rejection_window": [asdict(entry) for entry in record.rejection_window],
+        }
+        for record in records
+    ]
 
 
 class TriggerRequest(BaseModel):

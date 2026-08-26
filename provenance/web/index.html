@@ -91,6 +91,8 @@
   .row > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .fleet .row { grid-template-columns: 1.2rem 13rem 7.5rem 9rem minmax(0, 1fr) 3.6rem; }
   .ledger .row { grid-template-columns: 1.2rem 5rem minmax(0, 1fr) auto auto; }
+  .registry .row { grid-template-columns: minmax(0, 1fr) 2.2rem 5.5rem; }
+  .registry .why { display: block; white-space: normal; color: var(--dim); font-size: 11.5px; }
   .dot { color: var(--dim); }
   .run .dot { color: var(--warn); animation: pulse 1s ease-in-out infinite; }
   .ok .dot { color: var(--ok); } .err .dot { color: var(--bad); }
@@ -181,7 +183,7 @@
     <section>
       <h2>Registry panel</h2>
       <p>Agent standing, live, so a DEGRADED transition is visible the instant it happens.</p>
-      <span class="pending">awaiting item 28 · phase 8</span>
+      <div class="rows registry" id="registry"></div>
     </section>
     <section>
       <h2>Approval card</h2>
@@ -202,7 +204,9 @@
     span: what came of it reaches the trace through the verification span that judges it.
     The belief inspector reads <code>GET /belief/{entity}</code> instead, and has to: §8.1
     keeps content off spans, and a belief's evidence and arithmetic are content
-    (<code>docs/adr/ADR-021</code>).
+    (<code>docs/adr/ADR-021</code>). The registry panel reads
+    <code>GET /registry</code> for the same reason: standing is stored state, and a counter
+    derived from an in-process buffer can disagree with the registry it claims to show.
   </footer>
 </main>
 
@@ -442,6 +446,40 @@
     box.innerHTML = head + arithmetic + evidence + decay + chain;
   }
 
+  // --- registry panel (item 28) ------------------------------------------------------------
+  // The second surface reading Firestore rather than the span stream, for the reason the
+  // first one does (ADR-021): standing is stored state, and the in-process span buffer is
+  // capped and lossy, so a counter derived from it can disagree with the registry it claims
+  // to show. GET /registry reads at request time and caches nothing — §1.1 property 4 is the
+  // whole point here, since what this exists to show is a standing that changed a second ago.
+  async function registry() {
+    const box = el("registry");
+    let rows;
+    try {
+      const response = await fetch("/registry", { cache: "no-store" });
+      // A 503 is the registry being unreadable, which is not the same as everyone being in
+      // good standing. Leave the last known rows up rather than rendering a reassuring lie.
+      if (!response.ok) return;
+      rows = await response.json();
+    } catch { return; }
+
+    box.innerHTML = rows.map(a => {
+      const good = a.standing === "GOOD";
+      // The window is only shown where it means something. Every agent carries the field;
+      // rendering three empty lists next to the one that earned its entries buries the beat.
+      // Time rather than date: §3.4's window is 24 hours wide by construction, so the day is
+      // the one part of the stamp that cannot distinguish two entries.
+      const why = a.rejection_window.length
+        ? `<span class="why">${a.rejection_window.map(e =>
+            `${esc(String(e.rejected_at).slice(11, 16))} ${esc(e.reason)}`).join(" · ")}</span>`
+        : "";
+      return `<div class="row ${good ? "ok" : "err"}">` +
+        `<span class="who">${esc(a.id)}${why}</span>` +
+        `<span class="meta">${esc(a.version)}</span>` +
+        `<span class="verdict ${good ? "ok" : "err"}">${esc(a.standing)}</span></div>`;
+    }).join("");
+  }
+
   el("lookup").addEventListener("submit", event => {
     event.preventDefault();
     belief(el("f-entity").value.trim());
@@ -453,4 +491,9 @@
   // the 1s one -- 60x the reads would buy nothing, and items 28 and 29 are still visible.
   const inspect = () => belief(el("f-entity").value.trim());
   inspect(); setInterval(inspect, 15000);
+  // Standing changes once per demo but has to land inside one narration beat, so it sits
+  // between the 1s trace tick and the 15s belief tick. Four documents every 5s is ~69k reads
+  // a day from a tab left open; the 1s cadence would be ~350k against a 50k/day free tier,
+  // and the $300 ceiling is a design constraint here rather than something audited after.
+  registry(); setInterval(registry, 5000);
 </script>
