@@ -155,6 +155,13 @@
     font: 13px/1.5 var(--mono); }
   .risk .n { text-align: right; color: var(--fg); }
   .risk .k { color: var(--dim); }
+  /* The rows that actually produced the score. `--fg` against `--dim` on the 0-point rows,
+     so the three lines that make an 11 an 11 are the ones the eye lands on. */
+  .risk .weighs { color: var(--fg); font-weight: 600; }
+  .risk .k.weighs { color: var(--dim); font-weight: 400; }
+  .card .pred {
+    margin-top: 0.7rem; color: var(--dim); font: 12px/1.5 var(--mono); opacity: 0.85;
+  }
   .risk .tot { display: contents; }
   .risk .tot > * { border-top: 1px solid var(--line); padding-top: 0.4rem; font-weight: 600; }
   .card form.inline { margin-top: 0.9rem; }
@@ -561,7 +568,13 @@
   function arithmetic(a) {
     if (a.risk === null) return '<p class="id"><em>not scored — the proposal no longer validates.</em></p>';
     const p = a.proposal, r = a.risk;
-    const row = (n, k, why) => `<span class="n">+${n}</span><span class="k">${k}</span><span>${why}</span>`;
+    // A row that scored 0 is not why this stopped; a row that scored is. The emphasis is
+    // therefore read off the arithmetic rather than off an opinion about which row matters --
+    // no fifth table, and it stays correct if the §4.2 point tables ever move. Item 31's live
+    // reader took away the total and the threshold and none of the four rows behind them.
+    const row = (n, k, why) =>
+      `<span class="n">+${n}</span><span class="k${n ? " weighs" : ""}">${k}</span>` +
+      `<span class="${n ? "weighs" : ""}">${why}</span>`;
     return `<div class="risk">` +
       row(r.base, "the action itself", `<code>${esc(p.action_class)}</code>`) +
       row(r.criticality, "what it touches", esc(TIER[p.target_tier] ?? p.target_tier)) +
@@ -586,12 +599,14 @@
       `<h3>Why</h3>` +
       `<p><b>${esc(a.trigger_target)}</b> reported <b>${esc(a.trigger_signal)}</b> at ` +
       `<b>${esc(a.trigger_observed_value)}</b>. ${rests}</p>` +
-      // The predicate is a whole sentence the Planner declared before anything ran, so it
-      // gets a colon rather than being spliced into one -- and its own line, because this is
-      // what "did it work" will be judged against and a non-engineer should be able to read it.
-      `<p class="id">It counts as having worked when: ${esc(p.success_predicate)}</p>` +
       `<h3>Why it stopped here</h3>` +
       arithmetic(a) +
+      // Below the arithmetic, deliberately. It is the longest line on the card and the only
+      // one a model wrote, and while it sat above the risk block it competed with the rows
+      // for the reader's attention -- item 31's finding. It is a footnote to the decision,
+      // not a reason for it: nothing here is what the risk table read.
+      `<p class="pred">If this is approved, it counts as having worked when: ` +
+      `${esc(p.success_predicate)}</p>` +
       `<form class="inline" onsubmit="return false">` +
       `<label for="f-approver-${esc(a.id)}">your name</label>` +
       `<input id="f-approver-${esc(a.id)}" value="${esc(APPROVER)}">` +
