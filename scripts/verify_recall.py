@@ -186,10 +186,13 @@ async def cleanup(client: firestore.AsyncClient) -> None:
 async def checks(client: firestore.AsyncClient) -> None:
     print("\n[1] the index reads root documents only")
     statements = dict(await beliefs.class_statements(client=client))
+    # Scoped to this script's own fixtures rather than to the whole index: item 23 seeded a
+    # permanent class belief (`belief-service.tier2`), so an equality here was a claim about
+    # the store's population and went stale the moment a second item wrote to it.
     check(
-        set(statements) == {CLOSEST, CURRENT, DISTANT},
+        set(statements) & set(ALL_BELIEFS) == {CLOSEST, CURRENT, DISTANT},
         f"all three class beliefs are in the index and the entity belief is not: "
-        f"{sorted(statements)}",
+        f"{sorted(set(statements) & set(ALL_BELIEFS))}",
     )
     check(
         statements[CLOSEST] == CLOSEST_STATEMENT,
@@ -219,7 +222,7 @@ async def checks(client: firestore.AsyncClient) -> None:
         "and it does not reach the text a reasoning agent is shown",
     )
     check(
-        [b.belief_id for b in recalled.class_beliefs] == [CURRENT],
+        [b.belief_id for b in recalled.class_beliefs if b.belief_id in ALL_BELIEFS] == [CURRENT],
         "the weaker but current class belief is what survived -- so the drop above is "
         "specific, not recall returning nothing",
     )
@@ -246,8 +249,9 @@ async def checks(client: firestore.AsyncClient) -> None:
         f"nominated, so it can neither inform nor be dropped",
     )
     check(
-        set(nominated) == {CLOSEST, CURRENT},
-        f"exactly the two relevant beliefs were nominated, best first: {nominated}",
+        set(nominated) & set(ALL_BELIEFS) == {CLOSEST, CURRENT},
+        f"exactly the two relevant of this script's beliefs were nominated, best first: "
+        f"{nominated}",
     )
 
 

@@ -63,7 +63,7 @@ Further conventions:
 - Agents emit **typed objects only**: the Planner emits the canonical typed Action (`ARCHITECTURE.md` §3.1), never free-form text; the Analyst emits typed evidence and recommendations. Don't invent new response shapes — reuse the four canonical objects in §3. There is no `params` field and no `raw_content` field; don't add either.
 - Verification is three-valued (`CONFIRMED` / `REFUTED` / `INCONCLUSIVE`) and memory learns **only** from the outcomes verification could *settle*: `CONFIRMED` commits what worked, `REFUTED` commits the negative belief (confirmed refutation is knowledge — §7.2), and `INCONCLUSIVE` writes **nothing**. Never write a belief on `INCONCLUSIVE` — no partial credit. In `incident.py` the rule is the shape of `_LEARNS_FROM` rather than a branch: `INCONCLUSIVE` has no entry, so committing on it means adding a key.
 - Class beliefs are **advisory only**, and since item 23 that is two mechanisms rather than a rule to remember: `recall.Recalled` keeps them out of `entity_ids`, which is what `authorizations/{id}` cites, and `policy.commit()` refuses `CLASS_BELIEF_NOT_EVIDENCE` when a proposal cites one as evidence. They may reorder hypotheses; they may never authorize an action or serve as evidence for an entity-belief commit. The ledger cites `entity_ids`, never `belief_ids`.
-- Beliefs are append-only: supersession and retraction, never overwrite, never delete. Nothing under `provenance/` modifies or deletes a version. Don't add a `current_version` pointer; `current()` walks `versions/1, 2, …`.
+- Beliefs are append-only: supersession and retraction, never overwrite, never delete. Nothing under `provenance/` modifies or deletes a version. Don't add a `current_version` pointer; `current()` walks `versions/1, 2, …`. §6.5's expiry is a **superseding `UNKNOWN` version**, not a deletion, and `policy.expire()` refuses a belief already `UNKNOWN` or `RETRACTED` — without that refusal a warm instance appends a version every tick forever.
 - Fail-closed is the default posture for any subsystem failure that would silently weaken a guarantee (`ARCHITECTURE.md` §7.3). If unsure whether something should fail open or closed, it's closed.
 - A `source_class` weighing **0.00** corroborates nothing: §6.3's flip test filters its novel side by `BASE_WEIGHT`. This is not tidiness — before item 28 a bare `unverified_external_claim` could overturn any belief already past `FLIP_THRESHOLD`, because a flip is scored over the *accumulated* set and the 0.00 item leaves that number untouched. `BASE_WEIGHT` is therefore load-bearing in two places; adding a class at 0.00 silently makes it unable to corroborate anything.
 - No ML/LLM-based risk scoring — a deliberate constraint (see `docs/adr/ADR-003`), not a gap to fill in later. `risk.BASE` is the only home of `base[action_class]`; a third tool cannot ship without a base score. Don't add a third supplier tool to reach execution — the supply-chain incident ending `HELD` at 11 is the design.
@@ -119,6 +119,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_sanitizer.py` — item 26; mutates nothing
 - `scripts/verify_injection_arc.py` — item 27; mutates nothing; run `verify_supply_chain.py` alongside it — same trigger without the payload, same 11
 - `scripts/verify_poisoning_arc.py` — item 28; **writes live registry state** and restores it; no model calls
+- `scripts/verify_sweeper.py` — item 29; writes three scratch beliefs and deletes them; needs the app running (or `PROVENANCE_SERVICE_URL`) for its inspector step; no model calls
 
 Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
 
@@ -134,9 +135,11 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–8 done. Items 0.5–28 shipped (Aug 25). **Item 29 (the Staleness Sweeper) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–9 done. Items 0.5–29 shipped (Aug 26). **Item 30 (the approval queue with park/resume) is next.** See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
+
+- **Before 2026-09-22, re-affirm `SUP-042`.** Its v2 expires **2026-09-22** and `belief-service.tier2` expires **2026-09-24**, both inside the Oct 1 judging window — so from those dates item 29's Sweeper downgrades them to `UNKNOWN` on any warm instance, destroying the closing shot and the state items 27 and 28 both proved byte-identical. This is the Sweeper being correct, not a bug, and there is deliberately **no skip list** (`ADR-031`, the live finding). The fix is the mechanism the design already has: commit one fresh corroborating evidence item to `SUP-042` through the normal pipeline, which supersedes v2 and resets the clock. `seed_belief.py` has no `--reset` and must not grow one.
 
 - `seed_registry.py`, `seed_belief.py`, `seed_class_belief.py`, and `setup_model_armor.py` have **no `--reset`**. Don't invent one. A re-run must never rewrite a stored `DEGRADED`, a poisoned-then-defended `SUP-042` chain, the class belief, or a Model Armor template item 27 may tune on camera.
 - `SUP-042`'s chain and `belief-service.tier2` are permanent demo state. Items 27 and 28 both attack the first and both left it byte-identical; that is the closing shot, so anything that rewrites it destroys what two items proved. The class name is the Analyst's — read it out of the store, don't hardcode it. `pricing-api` must stay belief-free.
