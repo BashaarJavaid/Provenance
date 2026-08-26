@@ -257,6 +257,12 @@ Google's managed inline guardrail: template-configured prompt-injection/jailbrea
 
 Reduces raw inbound data to typed facts; tokenizes PII that survived Model Armor. Runs on a small, isolated open model served via Vertex AI Model Garden — untrusted content never reaches a frontier model raw. Its output is data, never authority: a fact it emits can inform a diagnosis but cannot authorize anything.
 
+**As built (item 26).** `provenance/sanitizer.py`, on **`gemma-4-26b-a4b-it-maas`** (`models.SANITIZER`), called through the `google.genai` client `recall.py` already uses on the `global` endpoint. `SANITIZE_ATTEMPTS = 4` with `BACKOFF_SECONDS = 1.0`, retried on 429 only; `PLACEHOLDER = ^\[[A-Z][A-Z0-9_]*_\d+\]$` is what a `pii_tokens` entry must match. It holds no registry record (§5.8's precedent) and emits a `provenance.reasoning.chain` span at `step="sanitize"`.
+
+Two places the implementation **corrects** the paragraph above. **It is not a deployed Model Garden endpoint** — the model is served as a service, so nothing is deployed and nothing bills while idle, which is why the cost discipline `ADR-006` implied does not exist. And **"typed facts" is a parser, not a schema**: Gemma ignores `responseSchema`, so `sanitizer._parse()` is the whole guarantee and every malformed answer is a refusal rather than a partial fact. `SanitizedFact` is not a fifth §3 object, on `incident.Trigger`'s reasoning.
+
+`incident.run_incident()` screens then sanitizes `Trigger.raw_content` as a plain step **before the incident span opens**, so §7.3's "ingest halts" leaves no incident at all; the fact reaches both domain agents through one shared `sanitized_facts` state key. Reasoning in [`docs/adr/ADR-028`](./docs/adr/ADR-028-the-gemma-sanitizer-as-built.md).
+
 ### 5.3 Orchestrator **[LLM]** — Gemini 2.5 Pro, ADK Graph Runtime
 
 Classifies the deviation, recalls entity-level *and* class-level beliefs (§6.6), routes to domain agent(s). Wake-on-event against the live trigger stream.
@@ -491,6 +497,8 @@ Three rules make the stream usable as an audit log rather than as debug output:
 `predicate_id` is `sha256(success_predicate)[:16]` (`action.predicate_id`), and carrying it here is what makes §3.1's "declared **before** execution" checkable rather than asserted: the id is on the incident span before anything runs, and item 10's `verification.outcome` span carries the same id afterwards. The predicate's *text* never reaches a span — the redaction rule above.
 
 The one deviation from "one stream, both destinations": Cloud **Trace** export is wired; Cloud **Logging** arrives with the first component that logs. On Cloud Run stdout reaches Cloud Logging without any exporter.
+
+**Amended in item 26 — the sanitizer reuses `reasoning.chain`, and the streak holds.** §5.2's sanitizer is an **[LLM]** component, which is exactly the owner this shape names, and `step` was already a free `str` — so `"sanitize"` needed no vocabulary change and no `tests/test_telemetry_schema.py` change. **Five shapes, no new attribute key.** The span carries the model id, the step and token counts; `selected_hypothesis` is the constant `"extraction"` rather than anything the model extracted, because this is the one span in the repo opened over raw untrusted text and the redaction rule binds hardest here. Unlike item 25's filter it does emit — a managed service screening is not our model call, and item 26's `verify:` line is phrased about the trace.
 
 **Amended in item 25 — Cloud Logging has entries now, and we still wrote no exporter.** Model Armor writes its own verdicts under `modelarmor.googleapis.com/SanitizeOperation` when the template carries `log_sanitize_operations`, so the first entries in Cloud Logging are the managed service's record rather than our restatement of it (`docs/adr/ADR-027`). Read literally, the sentence above still holds: no component of ours logs, and `google-cloud-logging` is still not a dependency. **Screening emits no span** — item 25 says verdicts are logged, never traced, and §5.1 makes Model Armor a filter rather than one of the decisions this vocabulary exists to carry. Five shapes; no new attribute key.
 

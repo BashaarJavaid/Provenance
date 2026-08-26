@@ -39,4 +39,14 @@ ANALYST = os.environ.get("PROVENANCE_MODEL_ANALYST", "gemini-2.5-pro")
 # at 768 dimensions, so `LOCATION` below covers it and recall needs no endpoint of its own.
 EMBEDDING = os.environ.get("PROVENANCE_MODEL_EMBEDDING", "text-embedding-005")
 
+# Item 26's sanitizer (§5.2). Probed live before it was wired, the way `text-embedding-005`
+# above was, and the probe overruled `ADR-006`: the E4B/12B it names are deploy-required
+# Model Garden models that bill by the hour while idle, whereas `gemma-4-26b-a4b-it-maas`
+# is served **as a service** -- no endpoint, no idle cost, nothing to undeploy. Two findings
+# the sanitizer is built around: it is **global-only** (a `us-central1` call answers
+# `FAILED_PRECONDITION`, so `LOCATION` below is not a knob here), and being PUBLIC_PREVIEW on
+# shared capacity it answers `429 "The request queue is full."` on roughly half of all calls.
+# `sanitizer.SANITIZE_ATTEMPTS` is the answer to the second. `docs/adr/ADR-028` records both.
+SANITIZER = os.environ.get("PROVENANCE_MODEL_SANITIZER", "gemma-4-26b-a4b-it-maas")
+
 LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")

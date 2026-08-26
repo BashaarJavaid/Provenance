@@ -12,6 +12,8 @@
 
 **Position in the stack:** Model Armor (managed screening, the guardrail the track brief names) runs first; the sanitizer second; neither is the boundary. See the injection row of `THREAT_MODEL.md`.
 
+**As built (ROADMAP item 26):** the isolation contract above is unchanged; the serving model named above is. Probing found `gemma-4-26b-a4b-it-maas` — serverless, so no endpoint is deployed and nothing bills while idle — and found that Gemma ignores `responseSchema`, so a strict parser rather than a schema is what makes the output typed. Both, and the PII leak the first live run caught, are recorded in [`ADR-028`](./ADR-028-the-gemma-sanitizer-as-built.md).
+
 **Revisit when:** structured-extraction quality on real inbound formats proves insufficient at Gemma's size — swap the model, keep the isolation contract.
 
 **Alternatives considered:** feeding raw input to Gemini with "be careful" system prompting (the system prompt is never the security boundary); regex/rule-based sanitization only (can strip patterns but can't extract typed facts from prose); Model Armor alone (screening filters classify, they don't reduce content to a typed representation — and classifiers miss things, which is exactly why there are layers).

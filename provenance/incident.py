@@ -71,10 +71,12 @@ from provenance import (
     credentials,
     executor,
     gateway,
+    ingest,
     models,
     policy,
     recall,
     registry,
+    sanitizer,
     telemetry,
     tools,
 )
@@ -183,12 +185,23 @@ class Trigger:
     a trigger carries none -- it is an observation that starts reasoning, and every field on
     it is re-derived from an authority before anything is decided. It is not persisted for
     the same reason: nothing reads an incident's trigger after the incident.
+
+    `raw_content` is item 26's untrusted-content path and does not weaken that argument -- it
+    strengthens it. It is the least authoritative field in the system: it is screened
+    (`ingest.screen()`), then reduced to a `sanitizer.SanitizedFact` by an isolated model, and
+    only the fact ever reaches a prompt. `None` is the ordinary case and means this deviation
+    came from our own instrumentation, which is every incident before item 26.
+
+    It is deliberately **not** on `POST /trigger`. Nothing over HTTP needs it until item 27's
+    arc drives the demo, and a public field ahead of its caller is the shape `CLAUDE.md` §2
+    forbids -- the same reasoning that kept `screen()` uncalled through item 25.
     """
 
     target: str
     signal: TriggerSignal
     observed_value: float
     observed_at: str
+    raw_content: str | None = None
 
 
 @dataclass(frozen=True)
@@ -272,7 +285,10 @@ def load_planner_key() -> ec.EllipticCurvePrivateKey:
 
 
 def _seed_state(
-    trigger: Trigger, planner_version: str, recalled: recall.Recalled
+    trigger: Trigger,
+    planner_version: str,
+    recalled: recall.Recalled,
+    facts: sanitizer.SanitizedFact | None = None,
 ) -> dict[str, Any]:
     """Everything an agent instruction interpolates. Facts come from authorities, not the trigger.
 
@@ -329,6 +345,14 @@ def _seed_state(
         # A *post*-state nothing has measured yet, so it says so. `execute` overwrites all
         # three before it can route to VERIFY, and no other node reads them.
         "post_config_version": "unknown",
+        # Item 26. Shared rather than per-domain: an untrusted inbound report is not a
+        # supply-chain fact, and a third domain gets the channel without adding it. `"none"`
+        # rather than absent, the way `malformed_feedback` and `planner_context` are seeded
+        # empty -- an instruction naming a key that was never seeded fails at interpolation
+        # time. This is the **only** value here derived from `trigger.raw_content`, which is
+        # what makes item 26's `verify:` line checkable: the dict this function returns is
+        # the complete set of values any frontier prompt interpolates.
+        "sanitized_facts": facts.render() if facts is not None else "none",
     }
     for entry in DOMAINS.values():
         shared |= entry.seed(trigger)
@@ -752,8 +776,16 @@ async def run_incident(
     model_planner: str | object = None,
     model_verification: str | object = None,
     embed: recall.Embedder | None = None,
+    sanitizer_client: Any | None = None,
 ) -> IncidentResult:
     """One trigger, one incident, one root span. Never raises on a bad proposal.
+
+    It **does** raise on untrusted content that cannot be made safe, and the two are not in
+    tension: a bad proposal is a result the loop is designed to produce, whereas ingest
+    failing is §7.3's "ingest halts". Both the screening and the sanitizing happen *before*
+    the incident span opens, so a halt leaves no incident id, no span and no record -- which
+    is what "halts" has to mean. An incident span carrying a halt outcome would assert that a
+    reasoning loop ran when none did.
 
     The model arguments exist so tests can substitute a fake `BaseLlm`; unset, each falls
     back to its `models.py` role string. `embed` is the same arrangement for item 16's recall
@@ -762,6 +794,18 @@ async def run_incident(
     never from a constant here.
     """
     now = now or datetime.now(UTC)
+
+    # §5.1 then §5.2, in that order and both outside the span below. Neither is one of the
+    # decisions §8.1's vocabulary carries, and a plain step here is `recall`'s precedent
+    # (§5.3): the graph stays the graph, so ADR-007's park/resume and item 20's re-plan edge
+    # are untouched by an ingest concern.
+    facts: sanitizer.SanitizedFact | None = None
+    if trigger.raw_content is not None:
+        verdict = await ingest.screen(trigger.raw_content)
+        if verdict.blocked:
+            raise ingest.ContentBlocked(verdict.filters_matched)
+        facts = await sanitizer.sanitize(trigger.raw_content, client=sanitizer_client)
+
     incident_id = f"inc-{uuid.uuid4().hex[:12]}"
     scratch = _Scratch()
 
@@ -786,7 +830,7 @@ async def run_incident(
             embed=embed,
         )
         scratch.recalled = recalled
-        state = _seed_state(trigger, agent.version, recalled)
+        state = _seed_state(trigger, agent.version, recalled, facts)
 
         graph = build_graph(
             trigger=trigger,

@@ -232,7 +232,7 @@ non-zero if any is missing or does not match the fixture.
 |---|---|---|
 | Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst. Gemini 3.5 Pro does not exist — Google's 3.x line is Flash-first and its only Pro-tier entry is a preview model (see `ROADMAP.md` item 1); the model is a config string per role, not a design assumption |
 | Verification | Gemini 3.5 Flash | High-throughput, lower-stakes three-valued verdicts |
-| Sanitization | Gemma 4 (Vertex AI Model Garden) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
+| Sanitization | Gemma 4 (`gemma-4-26b-a4b-it-maas`, serverless on Vertex AI) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
 | Inline guardrails | Model Armor | The managed screening service the track brief names; used honestly as a filter, never as the boundary |
 | Orchestration | Google ADK 2.0 | Graph Runtime for workflow routing; Task API for delegation and the parked-on-human-approval resume path |
 | HTTP surface | FastAPI (already a `google-adk` dependency) | One service serves the gateway and the UI shell; the shell is a single static file with no build step (`docs/adr/ADR-008`) |
