@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -19,7 +20,7 @@ from fastapi.testclient import TestClient
 from test_registry import FakeFirestore
 
 from provenance import app as app_module
-from provenance import beliefs, incident, policy, telemetry
+from provenance import beliefs, incident, policy, registry, telemetry
 from provenance.app import app
 
 
@@ -368,3 +369,91 @@ def test_an_unreadable_store_is_503_and_not_404(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(beliefs, "history", unreadable)
     with TestClient(app) as client:
         assert client.get("/belief/SUP-042").status_code == 503
+
+
+# --- the registry panel, item 28 ---------------------------------------------------------
+
+
+@pytest.fixture
+def agents(monkeypatch: pytest.MonkeyPatch) -> FakeFirestore:
+    """The four fixture agents as stored records, with the poisoned one already DEGRADED."""
+    fake = FakeFirestore(
+        {
+            agent.id: registry.to_document(
+                replace(
+                    agent,
+                    public_key="-----BEGIN PUBLIC KEY-----\nnot-a-real-key\n-----END PUBLIC KEY-----",
+                    standing="DEGRADED" if agent.id == "supply-chain-agent" else agent.standing,
+                    rejection_window=(
+                        tuple(
+                            registry.RejectionEntry(rejected_at=at, reason="FLIP_UNSUPPORTED")
+                            for at in (
+                                "2026-08-25T10:00:00Z",
+                                "2026-08-25T10:01:00Z",
+                                "2026-08-25T10:02:00Z",
+                            )
+                        )
+                        if agent.id == "supply-chain-agent"
+                        else agent.rejection_window
+                    ),
+                )
+            )
+            for agent in registry.AGENTS
+        }
+    )
+    monkeypatch.setattr(registry, "_default_client", lambda: fake)
+    return fake
+
+
+def test_the_registry_panel_is_readable_without_a_token(agents: FakeFirestore) -> None:
+    """Item 28's `verify:` line: the DEGRADED transition has to be visible live.
+
+    Open for the same reason `/trace` and `/belief` are -- a read spends nothing, and item
+    36's cold judge has no token. What it publishes is standing and the reasons that earned
+    it, which is what `THREAT_MODEL.md` records against this route.
+    """
+    with TestClient(app) as client:
+        response = client.get("/registry")
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["id"] for row in body] == [agent.id for agent in registry.AGENTS]
+    poisoned = next(row for row in body if row["id"] == "supply-chain-agent")
+    assert poisoned["standing"] == "DEGRADED"
+    assert [entry["reason"] for entry in poisoned["rejection_window"]] == ["FLIP_UNSUPPORTED"] * 3
+    # The contrast is the point: one row flips while the rest hold, which is what makes the
+    # transition legible on the panel rather than being a single label nobody can calibrate.
+    assert {row["standing"] for row in body if row["id"] != "supply-chain-agent"} == {"GOOD"}
+
+
+def test_the_registry_panel_never_serves_a_public_key(agents: FakeFirestore) -> None:
+    """The record carries one; the panel has no use for it and the route is unauthenticated.
+
+    Not a secret -- it is a *public* key, and item 7 verifies signatures against it. But this
+    route exists to render standing, and a field served because it happened to be on the
+    record is a field the next reader assumes something depends on.
+    """
+    with TestClient(app) as client:
+        body = client.get("/registry").json()
+    assert all("public_key" not in row for row in body)
+    assert all(set(row) == {"id", "version", "standing", "rejection_window"} for row in body)
+
+
+def test_an_unreadable_registry_is_503_and_not_an_all_good_panel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§7.3 on the panel: "the registry was unreadable" and "everyone is in good standing"
+    must not look alike.
+
+    This is the one wrong answer the surface can give. Item 28's whole beat is a standing
+    that *changed*; a route that degrades to an empty or all-GOOD list during an outage
+    would render the poisoning as having been repelled at exactly the moment nobody knows.
+    """
+
+    async def unreadable(*args: object, **kwargs: object) -> None:
+        raise registry.RegistryUnavailable("firestore unreachable")
+
+    monkeypatch.setattr(registry, "get_agent", unreadable)
+    with TestClient(app) as client:
+        response = client.get("/registry")
+    assert response.status_code == 503
+    assert response.json() != []
