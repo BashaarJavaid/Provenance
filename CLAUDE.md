@@ -137,7 +137,7 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–10 built. Items 0.5–30 shipped; **item 31 is deployed (`provenance-00021-sqk`) and verified live end to end** (Aug 26) — denied from the browser, and the DEGRADED score-2 half parked and resumed across two processes with all state restored. Outstanding: a non-engineer actually reading the card, which is the one claim no script can make. See item 31's done-note. **Item 32 (the `--memory-disabled` A/B counterfactual) is next** — the last build item before the Phase 12 bonus artifacts. Five of §8.2's six surfaces are now filled; only the counterfactual panel still carries a placeholder. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–10 done. Items 0.5–31 shipped (Aug 26), deployed at `provenance-00021-sqk`. **Item 32 (the `--memory-disabled` A/B counterfactual) is next** — the last build item, and the one that fills the sixth and final §8.2 surface. Item 31's `verify:` line passed with a finding: the reader got §4.2's *rule* ("the score was greater than 7") and none of its *stakes* — see its ROADMAP note before touching the card again. **Item 32 (the `--memory-disabled` A/B counterfactual) is next** — the last build item before the Phase 12 bonus artifacts. Five of §8.2's six surfaces are now filled; only the counterfactual panel still carries a placeholder. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
 

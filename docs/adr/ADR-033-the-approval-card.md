@@ -135,6 +135,16 @@ on the queue — which is a deliberate trade of availability for the card being 
 grounds. `index.html` grows by roughly 130 lines and its first `POST` that is not the trigger.
 `tests/test_app.py` gains an item-31 block. Nothing is deployed, nothing bills while idle.
 
+**Live reader finding (item 31's `verify:` line):** a non-engineer read the score-11 card cold
+and said *"it stopped because of some compliance check and because the score was greater than 7
+it stopped and asked."* The rule landed; the stakes did not — none of tier-1, org-wide or
+irreversible came back, and "some compliance check" was the whole of what they took from the
+action. Reason 9's rejected per-`action_class` prose table is *still* rejected for the reason
+given there, but the finding is real and points at two cheaper changes: weight the
+irreversibility row visually (it is the strongest sentence on the card and reads as the fourth
+of four), and demote the `success_predicate`, which is the longest line, the only model-written
+one, and the main competitor for attention with the arithmetic. Worth settling before item 37.
+
 **Revisit when:** two incidents can park concurrently and the panel wants ordering from
 Firestore rather than a sort in the browser (ADR-032's own clause, from the read side); a
 `REFUTED` verification produces the first real retraction and `flagged_by` finally has something
