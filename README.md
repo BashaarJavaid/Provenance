@@ -118,7 +118,7 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
         └──────────────────────────┘        └────────────┬───────────────────┘
                                                           │
                                        ┌──────────────────▼──────────────────┐
-                                       │   Institutional Memory Bank          │
+                                       │ Institutional Memory Bank (Firestore)│
                                        │   entity beliefs + class beliefs,    │
                                        │   supersession chain, retractions    │
                                        └──────────────────┬───────────────────┘
@@ -159,16 +159,24 @@ Full detail, including the assumptions the model rests on, in [`THREAT_MODEL.md`
 
 ## Quickstart
 
-**Local dev** (Python 3.12):
+**Local dev** (Python 3.12) — one command, then the suite:
+
+```bash
+./scripts/setup.sh       # PYTHON and VENV override the defaults
+.venv/bin/pytest         # 562 tests, no cloud credentials needed
+```
+
+<details><summary>What that script does, and why it is two installs rather than one</summary>
 
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pip install --no-deps portunusmcp==0.1.0   # mandatory second step — see below
-.venv/bin/pytest
+.venv/bin/pip install --no-deps portunusmcp==0.1.0   # mandatory second step
 ```
 
-The second install is separate on purpose: `portunusmcp` pins `fastapi==0.115.6`, which pip would silently downgrade out of `google-adk`'s supported range rather than reporting a conflict. `pip check` therefore exits non-zero in this environment by design, and CI does not gate on it.
+The second install is separate on purpose: `portunusmcp` pins `fastapi==0.115.6`, which pip would silently downgrade out of `google-adk`'s supported range rather than reporting a conflict. `pip check` therefore exits non-zero in this environment by design, and CI does not gate on it. **Skipping the second step is not a soft failure** — `provenance/credentials.py` imports `services.gateway` from it, so `pytest` fails at collection. That is why the script exists: `pip install -e .` alone looks like a broken repository.
+
+</details>
 
 **Google Cloud** (project, APIs, IAM, Firestore, and a live Gemini access probe):
 
@@ -417,6 +425,121 @@ Four Google AI models are integrated in total, each load-bearing: `gemini-3.5-fl
 (verification), `gemini-2.5-pro` (four reasoning roles), `gemma-4-26b-a4b-it-maas` (the isolated
 sanitizer for untrusted content), and `text-embedding-005` (the recall index, which nominates
 candidate beliefs and decides nothing).
+
+**On Vertex AI Agent Engine, and why the control plane is not built on it.** Agent Engine's
+managed agent registry, session service and Memory Bank are the obvious home for three of this
+project's components, and each was evaluated and declined for a reason recorded at the time
+rather than discovered afterwards:
+
+- **The registry.** The gateway re-reads standing on *every* authorization, because a park is
+  exactly the window in which standing moves and an agent suspended mid-incident must be denied
+  on its next request (`ARCHITECTURE.md` §1.1, property 4). A registry entry is therefore a
+  mutable runtime authorization input carrying a rejection window and a standing score, not a
+  deployment manifest — and the demo's whole poisoning arc is a registry field changing under a
+  running incident (`docs/adr/ADR-010`, [`ADR-030`](./docs/adr/ADR-030-the-poisoning-arc-and-standing.md)).
+- **The session service, for the parked-approval path.** `VertexAiSessionService` requires an
+  Agent Engine, which **bills while idle** — the one resource category this project's cost
+  ceiling names as able to drain a fixed $300 credit that also has to keep the demo alive
+  through October 1. The alternative, `SqliteSessionService`, writes to a container filesystem
+  Cloud Run discards on scale-to-zero, which a five-minute park at `--min-instances=0` is
+  guaranteed to meet. Full reasoning, including the two it displaced:
+  [`ADR-032`](./docs/adr/ADR-032-the-approval-queue.md).
+- **Memory Bank.** The "Memory Bank" in the diagram above is the track requirement, served by
+  Firestore. Institutional belief here needs supersession chains, retraction, computed
+  confidence and scheduled expiry — a versioned model of what the organization currently holds
+  true, which a similarity-ranked recall store is the wrong abstraction for. That argument is
+  the project's premise, not a workaround ([`ADR-001`](./docs/adr/ADR-001-firestore-single-store.md),
+  [`ADR-005`](./docs/adr/ADR-005-recall-index-nominates-store-decides.md)).
+
+What is used from the platform is used because it earns its place: ADK 2.0 for orchestration,
+Vertex AI for all four models, Model Armor as the managed inline guardrail, Cloud Run,
+Firestore, and Cloud Trace. The deliberate part is that a managed component never sits on the
+determinism boundary — every deterministic decision in this system is code in this repository,
+readable and testable, which is what makes "no LLM decides" a property a judge can check rather
+than a claim.
+
+## Repository layout
+
+Two things are worth knowing before reading any of it: **`provenance/` is the package** (never
+`services/` — that name would shadow installed `portunusmcp`), and **the deterministic files are
+the interesting ones**. `gateway.py`, `risk.py`, `policy.py` and `registry.py` contain no model
+call at all; that is the whole design, visible as a property of the file list.
+
+```
+provenance/                the package — the fleet and its control plane
+├─ app.py                  FastAPI: /trigger, /approvals, /trace, /belief, /registry, /counterfactual
+├─ incident.py             the incident loop — OBSERVE → … → LEARN, retry, escalation, park/resume
+│
+│  ── the determinism boundary: no model call below this line ──
+├─ gateway.py              THE only path to a state-mutating action (§2.1 stages 1–7)
+├─ risk.py                 the risk lookup table — objective properties, no ML (ADR-003)
+├─ policy.py               Memory Policy Engine — the only thing that commits a belief
+├─ registry.py             agent identity, tool scope, standing; read at request time, never cached
+├─ credentials.py          short-lived per-agent credential minting (ECDSA, via portunusmcp)
+├─ executor.py             re-verifies the signed decision before it writes anything
+├─ audit.py                the signed authorization ledger
+├─ approvals.py            the durable human-approval queue (survives a Cloud Run restart)
+├─ beliefs.py              append-only versioned belief store: supersession, retraction, expiry
+├─ sweeper.py              staleness: expiry downgrades to UNKNOWN, never deletes
+├─ recall.py               nominates candidate beliefs; the store decides what is true
+├─ action.py / tools.py    the canonical typed Action and the tool registry it validates against
+├─ ingest.py               Model Armor screening on untrusted inbound content
+├─ sanitizer.py            Gemma 4, isolated: untrusted text → typed facts, PII tokenized
+├─ telemetry.py            the only place a span is emitted (identifiers and numbers, never content)
+├─ models.py               every model id, one config string each
+│
+├─ agents/                 the reasoning half — every file here calls a model and decides nothing
+│  ├─ orchestrator.py      classify → recall → route
+│  ├─ sre_infra.py         domain agent #1
+│  ├─ supply_chain.py      domain agent #2 — what the second domain cost, itemized above
+│  ├─ planner.py           emits one typed Action — never free-form text
+│  ├─ verification.py      CONFIRMED / REFUTED / INCONCLUSIVE against a pre-declared predicate
+│  └─ memory_analyst.py    recommends beliefs; never commits one
+├─ synthetic/company.py    the synthetic enterprise every incident recurs over
+└─ web/index.html          the UI — one static file, no build step (ADR-008)
+
+scripts/                   seed_*.py, verify_*.py (one per ROADMAP item), deploy.sh, setup.sh
+tests/                     562 tests, one file per module; no cloud credentials
+docs/adr/                  one file per decision, including the alternatives declined
+docs/counterfactual/       the raw A/B run artifacts — the evidence, not the report
+```
+
+`CLAUDE.md` maps each `verify_*.py` script to the ROADMAP item whose claim it checks.
+
+## What building it turned up
+
+The things worth saying that the video has no seconds for. Each links its full record.
+
+- **The A/B measurement came back against the design, and it shipped anyway.** Recall was
+  supposed to make incident #2 faster. Twelve live incidents say it costs **34% more wall-clock**
+  and changes nothing else, because the domain agent's prompt already carries the hint that makes
+  the diagnosis reachable — a ceiling, not a defect. The hint stayed and the negative result is
+  in the UI: [`docs/counterfactual-report.md`](./docs/counterfactual-report.md).
+- **The item built to demonstrate a defence found the defence incomplete.** Poisoning is stopped
+  by arithmetic: `unverified_external_claim` weighs 0.00, so it moves no confidence. But a
+  *flip* is scored over the **accumulated** evidence set, so a zero-weight item rode along on a
+  set already past the threshold and a bare assertion overturned a belief it should not have been
+  able to touch. Filtering the flip test's novel side by base weight is the fix (ROADMAP item 28,
+  [`ADR-030`](./docs/adr/ADR-030-the-poisoning-arc-and-standing.md)).
+- **A design decision that did not survive contact with the SDK.** The parked-approval path was
+  specified against an ADK Task API. There is no ADK Task API — there are primitives to assemble,
+  and both available session backends fail here (one writes to a filesystem Cloud Run discards on
+  scale-to-zero; the other needs an idle-billing Agent Engine). `ADR-007` is marked superseded in
+  part rather than rewritten, because the record of a choice that did not survive is the useful
+  part ([`ADR-032`](./docs/adr/ADR-032-the-approval-queue.md)).
+- **A mutation survived the test suite, and the survivor was a claim about the suite.** Flipping
+  `run_incident`'s `memory` default to `False` left all 561 tests green — the test helper forwards
+  the flag explicitly and so cannot see a change to the default. A fleet that silently never
+  recalls is exactly that regression, so the default is now pinned directly (ROADMAP item 32).
+- **The most likely act of a curious judge was the destructive one.** The trigger form defaulted
+  to the incident that *executes*, and a successful arc heals the world it started from — one
+  idle click spent the "cold case, no memory yet" premise the demo's first beat depends on. Found
+  by running it live, not by reasoning about it. The strip now defaults to the repeatable
+  supply-chain incident (ROADMAP item 36).
+- **What we would tell someone starting this.** Write the verification criterion before the
+  feature. Every ROADMAP item carries a `verify:` line, and the ones that produced findings are
+  the ones whose line was discharged against the real thing — real Firestore, real Gemini, live
+  registry state — rather than against a fixture that agreed with us.
 
 ## Documentation
 

@@ -69,6 +69,30 @@ itself rather than about the tests.
 Full design: `ARCHITECTURE.md`. Every significant decision, including the alternatives that
 were rejected, has its own file in `docs/adr/`.
 
+**On Vertex AI Agent Engine, and why the control plane is not built on it.** Agent Engine's
+managed agent registry, session service and Memory Bank are the obvious home for three of these
+components. Each was evaluated and declined, for reasons recorded at the time:
+
+- **The registry** is a mutable runtime authorization input, not a deployment manifest. The
+  gateway re-reads standing on *every* authorization, because a park is exactly the window in
+  which standing moves and an agent suspended mid-incident must be denied on its next request.
+  The demo's poisoning arc *is* a registry field changing under a running incident (`ADR-010`,
+  `ADR-030`).
+- **The session service**, for the parked-approval path: `VertexAiSessionService` requires an
+  Agent Engine, which bills while idle — the one resource category able to drain a fixed $300
+  credit that also has to keep the demo alive through October 1. `SqliteSessionService` writes
+  to a container filesystem Cloud Run discards on scale-to-zero, which a five-minute park at
+  `--min-instances=0` is guaranteed to meet (`ADR-032`).
+- **Memory Bank.** Institutional belief here needs supersession chains, retraction, computed
+  confidence and scheduled expiry — a versioned model of what the organization currently holds
+  true. A similarity-ranked recall store is the wrong abstraction for that, and saying so is the
+  project's premise rather than a workaround (`ADR-001`, `ADR-005`).
+
+What is used from the platform earns its place: ADK 2.0, Vertex AI for all four models, Model
+Armor, Cloud Run, Firestore, Cloud Trace. The deliberate part is that no managed component sits
+on the determinism boundary — every deterministic decision is code in this repository, readable
+and testable, which is what makes "no LLM decides" checkable rather than claimed.
+
 ## Google AI models integrated
 
 > The mandatory model requirement is met by `gemini-3.5-flash` via Vertex AI — it is the

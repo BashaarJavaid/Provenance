@@ -35,7 +35,7 @@
 <text x="470.0" y="457" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="400" fill="#64748b">Gemini 2.5 Pro, ADK Graph Runtime</text>
 <text x="470.0" y="476" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="400" fill="#64748b">classify → recall → route</text>
 <rect x="790" y="414" width="300" height="76" rx="8" fill="#f8fafc" stroke="#475569" stroke-width="1.6"/>
-<text x="940.0" y="442" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#0f172a">Memory Bank</text>
+<text x="940.0" y="442" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#0f172a">Memory Bank (Firestore)</text>
 <text x="940.0" y="461" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="400" fill="#64748b">beliefs about this entity</text>
 <text x="940.0" y="478" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="400" fill="#64748b">and about its class</text>
 <path d="M 640 452 L 790 452" stroke="#475569" stroke-width="1.6" marker-start="url(#s)" marker-end="url(#a)"/>
@@ -111,7 +111,7 @@
 <text x="450" y="1236" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="400" fill="#64748b">never commits</text>
 <path d="M 720 1274 L 720 1306" stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
 <rect x="530" y="1308" width="380" height="76" rx="8" fill="#f8fafc" stroke="#475569" stroke-width="1.6"/>
-<text x="720.0" y="1336" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#0f172a">Institutional Memory Bank</text>
+<text x="720.0" y="1336" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#0f172a">Institutional Memory Bank (Firestore)</text>
 <text x="720.0" y="1355" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="400" fill="#64748b">entity beliefs + class beliefs,</text>
 <text x="720.0" y="1372" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" font-weight="400" fill="#64748b">supersession chain, retractions</text>
 <path d="M 720 1384 L 720 1404 L 430 1404 L 430 1424" stroke="#475569" stroke-width="1.6" fill="none" marker-end="url(#a)"/>

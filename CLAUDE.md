@@ -81,7 +81,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 
 **Local**
 
-- Setup: `python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/pip install --no-deps portunusmcp==0.1.0` — second step is mandatory (item 0.5). `pip check` exits non-zero by design.
+- Setup: `./scripts/setup.sh` — venv + the two installs in order (`PYTHON` / `VENV` override). The second install is mandatory (item 0.5) and skipping it fails `pytest` at collection, because `credentials.py` imports `services.gateway`. `pip check` exits non-zero by design.
 - `.venv/bin/pytest` / `.venv/bin/ruff check .` / `.venv/bin/ruff format --check .` / `.venv/bin/mypy provenance/`
 - CI (`.github/workflows/ci.yml`): lint, format, type-check, tests — no cloud credentials, no `pip check`
 
