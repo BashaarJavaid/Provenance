@@ -268,17 +268,24 @@ Two audiences, and the first one needs nothing but a browser.
 
 Live: **https://provenance-808273007560.us-central1.run.app**
 
-The trigger token below is deliberately public — the service is rate-limited by
-`--max-instances=1` and an incident runs serially in about a minute, so the worst a stranger
-can do is make the queue wait. It is rotated after judging closes.
+**Everything below happens in the browser. You do not need a terminal, a checkout, or
+credentials of your own.**
+
+One thing to set up first: the page has a **token** field in the trigger strip at the top.
+Paste this into it and leave it there —
 
 ```
-X-Provenance-Token: f18588110213f0705e4e96bf9ab524cac0e1580f9ac1c58b
+f18588110213f0705e4e96bf9ab524cac0e1580f9ac1c58b
 ```
 
-It guards `POST /trigger` and `POST /approvals/{id}` and nothing else. Every read surface —
-`GET /trace`, `/belief/{entity}`, `/registry`, `/approvals`, `/counterfactual` — is
-unauthenticated on purpose: reading the queue is not the same act as answering it.
+— because that single field is read by *both* the "Wake the fleet" button and the Approve /
+Deny buttons on the approval card. Fill it once and the whole walkthrough works.
+
+The token is deliberately public. The service runs at `--max-instances=1` and an incident
+takes about a minute serially, so the worst a stranger can do is make the queue wait; it is
+rotated after judging closes. It guards the two writing routes — `POST /trigger` and
+`POST /approvals/{id}` — and nothing else. Every read surface is unauthenticated on purpose,
+because reading the queue is not the same act as answering it.
 
 ### Walkthrough — the URL and nothing else
 
@@ -333,7 +340,9 @@ the system's memory rather than its idle state.
    hashes and numbers and never content.
 
 This path mutates nothing and can be run again immediately — by you, or by the next person to
-open the URL. If you would rather drive it with `curl`:
+open the URL.
+
+<details><summary>The same walkthrough as <code>curl</code>, if you would rather not click</summary>
 
 ```bash
 URL=https://provenance-808273007560.us-central1.run.app
@@ -348,6 +357,8 @@ curl -s "$URL/approvals"                        # no token needed to read the qu
 curl -sX POST "$URL/approvals/<approval_id>" -H 'Content-Type: application/json' \
   -H "X-Provenance-Token: $TOKEN" -d '{"verdict":"approve","approver":"your.name"}'
 ```
+
+</details>
 
 A denial is a durable answer: the queue keeps the record as `DENIED` and the ledger keeps the
 signed row. Nothing here needs cleaning up between visitors.
