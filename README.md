@@ -308,7 +308,8 @@ the system's memory rather than its idle state.
    where it came back **against** the design. It serves a committed artifact rather than
    re-running, because a button that spent twelve live incidents would answer differently every
    afternoon. Method and full numbers: [`docs/counterfactual-report.md`](./docs/counterfactual-report.md).
-4. **Wake the fleet on the supply-chain incident.** In the trigger strip set:
+4. **Wake the fleet on the supply-chain incident.** The trigger strip is already set to it —
+   check the fields read:
 
    | field | value |
    |---|---|
