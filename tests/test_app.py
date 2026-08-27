@@ -89,6 +89,15 @@ def test_root_serves_the_shell_with_all_six_surfaces() -> None:
         assert surface in response.text
 
 
+def test_the_shell_is_not_cached_between_redeploys() -> None:
+    """The shell's JavaScript is inline, so a cached shell is a stale renderer running against
+    live routes — item 31's live finding. Every fetch already passes `cache: "no-store"`; this
+    pins the same posture on the one response those fetches ride in on."""
+    with TestClient(app) as client:
+        response = client.get("/")
+    assert response.headers["cache-control"] == "no-store"
+
+
 # --- GET /trace (item 11) -----------------------------------------------------------------
 
 

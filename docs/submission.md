@@ -42,6 +42,14 @@ and the hold/resume path are new code here (`ADR-004`, `ADR-012`, and `README.md
 disclosure table). **Injection defense:** Model Armor is wired and measured (item 25) but
 nothing calls it yet — the sanitizer that gives it a consumer is item 26.
 
+*(as built)* **The rules' mandatory model requirement is met by `gemini-3.5-flash` on Vertex
+AI** — it is the verification judge on every incident, so every run a judge triggers exercises
+it. The four reasoning roles run GA `gemini-2.5-pro` because the 3.x line has no GA Pro tier,
+and a preview model can change or be withdrawn inside the October 1 judging window (`ROADMAP.md`
+item 1's deviation note has the catalog probe behind that). Stage One is pass/fail on a skim, so
+`README.md`'s tech-stack table leads with the verification row rather than letting a 2.5 be the
+first model a judge sees.
+
 ---
 
 ## 21. Bonus points and submission logistics
@@ -62,3 +70,13 @@ Submission checklist beyond the video:
 *(as built)* "§7" is `ARCHITECTURE.md` §4; "§14" is `README.md`'s tech-stack table; "§13"
 is [`demo-script.md`](./demo-script.md); "§17" is `README.md`'s pre-existing-code
 disclosure. These four bullets are ROADMAP items 33–36 and 38.
+
+*(as built)* The three pieces of writing those bullets call for are drafted, unpublished, and
+live one to a file: [`devpost-draft.md`](./devpost-draft.md) (item 35),
+[`blog-draft.md`](./blog-draft.md) (item 33), [`social-draft.md`](./social-draft.md) (item 34).
+Publishing is the human half of each item's `verify:` line and none of the three is done until
+its public URL exists. The bonus arithmetic above is unchanged by them; what changed since the
+spec wrote it is that **four** Google AI models are integrated rather than the one Gemma the
+bullet names — the sanitizer, the recall index's `text-embedding-005`, and `gemini-2.5-pro`
+alongside the mandated `gemini-3.5-flash`. The +0.2-per-model bonus caps at +0.6 either way,
+and a judge may reasonably count "Gemini" once; the draft lists all four and lets them.

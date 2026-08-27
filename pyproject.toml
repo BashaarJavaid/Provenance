@@ -49,9 +49,11 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["provenance*"]
 
-# The UI shell is a data file, not a module; without this the wheel drops it.
+# The UI shell is a data file, not a module; without this the wheel drops it. The JSON is
+# item 32's committed A/B table, read by GET /counterfactual — the Dockerfile's COPY never
+# notices either glob, but a wheel install without both breaks a route.
 [tool.setuptools.package-data]
-provenance = ["web/*.html"]
+provenance = ["web/*.html", "web/*.json"]
 
 [tool.ruff]
 line-length = 100
