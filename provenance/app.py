@@ -130,7 +130,10 @@ async def health() -> dict[str, Any]:
 
 @app.get("/")
 async def shell() -> FileResponse:
-    return FileResponse(_SHELL, media_type="text/html")
+    # `no-store`, because the shell carries the renderers inline: a browser that cached it
+    # before a redeploy runs the *old* JavaScript against the new routes (item 31's live
+    # finding — the fetches already pass `cache: "no-store"`, but the page itself did not).
+    return FileResponse(_SHELL, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/trace")

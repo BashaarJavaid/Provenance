@@ -46,6 +46,7 @@
   button:disabled { opacity: 0.5; cursor: progress; }
   #note { font: 12px/1.4 var(--mono); color: var(--dim); flex-basis: 100%; margin: 0; }
   #note.bad { color: var(--bad); }
+  #note a { color: inherit; text-decoration: underline; }
 
   /* --- incident header (the provenance.incident root span) --- */
   #incident {
@@ -199,7 +200,10 @@
     <label for="f-token">token</label>
     <input id="f-token" type="password" placeholder="X-Provenance-Token">
     <button type="submit">Wake the fleet</button>
-    <p id="note">Inject the fault first (<code>scripts/inject_fault.py</code>), then wake the fleet and watch below.</p>
+    <p id="note">First time here? <a href="https://github.com/BashaarJavaid/Provenance#run-the-demo">The
+      README's “Run the demo” section</a> walks this page step by step, token included. From a
+      checkout: inject the fault first (<code>scripts/inject_fault.py</code>), then wake the fleet
+      and watch below.</p>
   </form>
 
   <div id="incident"></div>

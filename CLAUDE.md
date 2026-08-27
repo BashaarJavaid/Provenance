@@ -150,7 +150,7 @@ Live traps (would strand the fleet or the demo):
 
 - **`verify_approval_queue.py` refuses on an *answered* record too, not just a parked one.** Its teardown deletes the whole `approvals` collection, so the demo's deny beat leaves a `DENIED` record that blocks the next run. Clear it deliberately — the durable record of a verdict is the `authorizations/` ledger row, which deleting the queue entry does not touch.
 
-- **`GET /` is not cache-busted.** Every `fetch` in the UI passes `cache: "no-store"`, but the shell HTML does not, so a browser that loaded the page before a redeploy runs the *old* JavaScript against the new routes. Cost half an hour during item 31. Hard-reload between takes (item 37), or add a cache header if it becomes a habit.
+- **`GET /` sends `Cache-Control: no-store` since Aug 27 — but only after the next redeploy.** The original trap (the shell HTML was not cache-busted, so a browser that loaded the page before a redeploy ran the *old* inline JavaScript against the new routes; cost half an hour during item 31) is fixed in `app.py` and pinned by `test_the_shell_is_not_cached_between_redeploys`. Until the revision carrying it is deployed, keep hard-reloading between takes (item 37).
 
 - **`GET /approvals` now reads the registry, so a registry outage 503s the approval queue.** Item 31's card derives `hold_reason` from a request-time `registry.get_agent()` per parked record, because a park is exactly the window in which standing moves. That is deliberate (`ADR-033` reason 11: a card that cannot state its grounds is worse than no card), but it means the queue has a second failure mode the README's curl did not have. Don't "fix" it by falling back to a blank hold reason.
 
