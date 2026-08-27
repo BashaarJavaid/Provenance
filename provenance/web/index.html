@@ -194,9 +194,14 @@
     <label for="f-target">target</label>
     <input id="f-target" value="inventory-api">
     <label for="f-signal">signal</label>
-    <select id="f-signal"><option value="error_rate">error_rate</option></select>
+    <select id="f-signal">
+      <option value="error_rate">error_rate</option>
+      <option value="compliance_lapse">compliance_lapse</option>
+    </select>
     <label for="f-value">observed</label>
-    <input id="f-value" type="number" step="0.01" min="0" max="1" value="0.38">
+    <!-- No `max`: what the number means is the signal's business. An error rate is a
+         fraction; a compliance lapse is a count of days (SUP-042 reports 14). -->
+    <input id="f-value" type="number" step="0.01" min="0" value="0.38">
     <label for="f-token">token</label>
     <input id="f-token" type="password" placeholder="X-Provenance-Token">
     <button type="submit">Wake the fleet</button>

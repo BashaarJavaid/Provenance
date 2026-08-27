@@ -3,8 +3,10 @@
 **What this is:** the demo choreography, lifted verbatim from
 [`self-healing-enterprise-project-spec (1).md`](<../self-healing-enterprise-project-spec (1).md>)
 §13 so that ROADMAP Phases 12–14 can point at a live document instead of into a frozen
-spec. **The beats below are unedited spec text.** Only this header and the reference table
-are new.
+spec. **The §13 beats below are unedited spec text**; this header, the reference table, and
+the *As filmed* section at the end are new. Where the build and the spec disagree, the beats
+are left alone and the disagreement is recorded — in the two drift notes here, and in the
+as-filmed narration that supersedes beat #2.
 
 Cross-references in the body use the spec's own section numbers. Their current homes:
 
@@ -18,12 +20,34 @@ Cross-references in the body use the spec's own section numbers. Their current h
 | §12 the synthetic company | `ARCHITECTURE.md` §9 |
 | §21 bonus + submission | [`docs/submission.md`](./submission.md) |
 
-**One drift to narrate honestly:** incident #3's beat says the class belief fires on
-`pricing-api` and the config-deploy hypothesis is prioritized. As built (ROADMAP item 24)
-the class belief *is* nominated, survives the currency filter and reaches the agent's
-prompt before the first hypothesis — but the incident ends `ESCALATED`, because the
-executor refuses an action `pricing-api` cannot receive, and item 32's A/B is still where
-the causation number comes from. See `ARCHITECTURE.md` §6.2 and `ADR-026`.
+**Two drifts to narrate honestly.** Both are the build disagreeing with the spec, and
+both are recorded rather than filmed around.
+
+**Incident #3 — it escalates.** The beat says the class belief fires on `pricing-api` and
+the config-deploy hypothesis is prioritized. As built (ROADMAP item 24) the class belief
+*is* nominated, survives the currency filter and reaches the agent's prompt before the first
+hypothesis — but the incident ends `ESCALATED`, because the executor refuses an action
+`pricing-api` cannot receive. That is the generalization beat succeeding and the *execution*
+declining, which is a better story than the spec's, not a worse one: the fleet applied what
+it learned about a class to an entity it had never seen, and then still would not act
+outside what the entity could receive. See `ARCHITECTURE.md` §6.2 and `ADR-026`.
+
+**Incident #2 — the A/B came back negative, and the beat leads with that.** The spec beat
+assumes the measurement will flatter the design. It does not.
+[`docs/counterfactual-report.md`](./counterfactual-report.md) is titled *"Memory made
+incident #2 cost 34% more wall-clock and changed nothing it concluded"*, and every other
+metric in the table is identical across the two arms. The reason is a ceiling, not a defect:
+`sre_infra.py`'s prompt has carried a config-regression hint since item 9, so the domain
+agent reaches the right diagnosis with or without a recalled belief and a metric measuring
+the diagnosis has no room to move. **Do not "fix" this by deleting the hint** — item 18
+rejected that once and item 32's ROADMAP note rejects it again, with reasons. The as-filmed
+narration below replaces the spec's beat rather than softening it.
+
+Two further corrections the spec's beat text gets wrong and the narration must not repeat:
+the A/B table reports **model calls**, not tool calls (the fleet makes no tool calls in this
+incident), and "hypotheses evaluated before the correct one" is `hypotheses_considered` — a
+**model-asserted** number, which is exactly why it is reported as one and never fed to a
+deterministic decision.
 
 ---
 
@@ -47,3 +71,74 @@ The §10 payload arrives. Model Armor screens it — the crafted payload clears 
 The Staleness Sweeper fires on an unrelated expiring belief and downgrades it to `UNKNOWN(stale)` — the system visibly distinguishing "we know this is fine" from "we haven't checked lately."
 
 That arc demonstrates the §1 claim end to end: it acts, it learns, it generalizes what it learned, it protects what it learned, it punishes attempts to corrupt it, and it knows when its own knowledge has gone stale.
+
+---
+
+## As filmed — what replaces beat #2, and the shot list
+
+The section above is frozen spec text. This section is what the camera actually does.
+
+### Beat #2, as narrated
+
+> "The obvious claim here is that memory makes the fleet faster. We measured it, and it
+> doesn't. Twelve live incidents, six of them measured: with recall on, this incident took
+> thirty-four percent more wall-clock, and every other number — model calls, hypotheses,
+> the diagnosis, the verdict, the committed confidence — came back identical. Recall is a
+> Firestore read, an embedding call and a longer prompt, all on the critical path, and on
+> this fixture it buys nothing back. The reason is that the domain agent's prompt already
+> contains the hint that makes this diagnosis reachable, so there was never any room for
+> memory to move the number. We left the hint in and published the negative result, because
+> the claim this project actually makes about memory is that belief becomes *governed and
+> inspectable* — not that one incident gets faster. That claim is the next thirty seconds."
+
+Then cut to incident #3. The negative result is the setup for the generalization beat, which
+is where memory does something nothing else in the system can do.
+
+**On screen for those twenty seconds:** the counterfactual panel and nothing else. It serves
+a committed artifact rather than re-running, so it paints instantly and shows the same
+numbers on every take. Do not attempt a live A/B — a sixty-second two-arm run is the single
+most failure-prone thing a demo can contain, and re-recording the measurement would overwrite
+the committed evidence the report's prose describes.
+
+### Shot list
+
+Total 3:40. The rules evaluate the first 4:00, so the closing claim must land before 3:40,
+not at it.
+
+| # | Beat | Budget | On screen | Live or pre-triggered |
+|---|---|---|---|---|
+| 1 | Cold open — the claim | 0:15 | The claim, over the architecture diagram | — |
+| 2 | Incident #1, the fleet acts | 0:40 | Trigger strip → live fleet view filling → gateway ledger → the written belief | **Live.** Press the trigger on camera; narrate over the ~60s run |
+| 3 | Incident #2, measured not asserted | 0:20 | Counterfactual panel only | Committed artifact — instant |
+| 4 | Incident #3, the fleet generalizes | 0:30 | The trace showing the class belief reaching the prompt on a never-seen entity, then `ESCALATED` | **Pre-triggered.** Have the completed trace on screen |
+| 5 | The attack, twice | 1:00 | Injection → gateway holds → approval card → deny; then the poisoning attempt → registry panel flipping to `DEGRADED` → the closing `SUP-042` shot | **Mixed.** Incidents pre-triggered; the *deny* and the registry refresh are live and instant |
+| 6 | It knows what it doesn't know | 0:20 | Sweeper downgrading a belief to `UNKNOWN(stale)` | Pre-arranged scratch belief |
+| 7 | Google Cloud proof shot | 0:15 | Cloud Run console: the service, `--max-instances=1`, the live URL; Vertex logs if time allows | Live console — **mandatory**, budgeted, not squeezed into a corner |
+| 8 | Closing claim | 0:20 | Back to the claim | — |
+
+Three incidents cannot be filmed live inside 3:40 — each is roughly a minute of sequential
+`gemini-2.5-pro` calls. Beat 2 is the one that earns the live take, because it is the beat
+where "filmed live and unedited" is worth the seconds; the rest show completed traces, which
+is what a trace panel is *for*.
+
+### Before each take
+
+- **Warm the instance.** `min-instances=0` means the first request pays a cold start. Hit
+  `/health` before rolling so the trigger press is the only latency on camera.
+- **Reset the fixture** with `scripts/seed_firestore.py --reset` — incident #1 heals the world
+  it started from, so a second take without a reset runs against an already-rolled-back service.
+- **Clear the approval queue after the deny beat.** A denial leaves a `DENIED` record, and
+  `verify_approval_queue.py` refuses to start on a non-empty queue. Delete it deliberately; the
+  durable record of the verdict is the `authorizations/` ledger row, which that does not touch.
+- **Do not touch `SUP-042`'s chain or `belief-service.tier2`.** They are permanent demo state
+  and the closing shot is that two attacks left them byte-identical. `seed_belief.py` has no
+  `--reset` and must not grow one.
+- **One tab.** The service runs at `--max-instances=1` and the trace panel's span buffer is
+  in-process; a second tab triggering an incident lands on the same instance and interleaves.
+- **Zoom to 125–150%** for the three close-ups that carry numbers: the risk arithmetic on the
+  approval card, the registry panel's standing column, and the belief object's computed
+  confidence and evidence IDs. At 100% these are unreadable at video bitrates, and they are
+  the shots the architecture argument rests on.
+- Hard-reloading between takes is no longer required — `GET /` sends `Cache-Control: no-store`
+  as of the revision deployed 2026-08-27.
+

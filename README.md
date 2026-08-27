@@ -46,6 +46,10 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
 
 ## Architecture
 
+<img src="./docs/architecture.svg" alt="Provenance architecture: a trigger passes Model Armor and the Gemma 4 sanitizer, reaches the Orchestrator and a domain agent, and the Remediation Planner's typed action can only reach execution through the deterministic Agent Gateway; after execution the Verification Agent's three-valued verdict gates a second deterministic checkpoint, the Memory Policy Engine, which is the only thing that commits a belief." width="100%">
+
+<details><summary>The same diagram as text</summary>
+
 ```
                               TRIGGER EVENT
                      (infra anomaly / supplier alert)
@@ -126,6 +130,9 @@ Agents propose. A deterministic policy layer decides. Systems execute. Verificat
                                                           on expiry → re-verify
                                                           or downgrade to UNKNOWN
 ```
+
+</details>
+
 
 Four properties are load-bearing and non-negotiable in implementation:
 
@@ -257,14 +264,123 @@ non-zero if any is missing or does not match the fixture.
 
 ## Run the demo
 
-*To be filled in once the arc is recordable (Phase 14). One continuous incident arc — act, remember, generalize, survive an attack, know what it doesn't know — targeted at 3:40 of video. Script and beats: [`docs/demo-script.md`](./docs/demo-script.md).*
+Two audiences, and the first one needs nothing but a browser.
+
+Live: **https://provenance-808273007560.us-central1.run.app**
+
+The trigger token below is deliberately public — the service is rate-limited by
+`--max-instances=1` and an incident runs serially in about a minute, so the worst a stranger
+can do is make the queue wait. It is rotated after judging closes.
+
+```
+X-Provenance-Token: f18588110213f0705e4e96bf9ab524cac0e1580f9ac1c58b
+```
+
+It guards `POST /trigger` and `POST /approvals/{id}` and nothing else. Every read surface —
+`GET /trace`, `/belief/{entity}`, `/registry`, `/approvals`, `/counterfactual` — is
+unauthenticated on purpose: reading the queue is not the same act as answering it.
+
+### Walkthrough — the URL and nothing else
+
+**First, what an empty panel means.** The service runs at `min-instances=0`, so your first
+request wakes a cold instance and takes a few seconds. The **live fleet view** and **gateway
+ledger** render an in-process span buffer, so until you trigger something they are empty. That
+is scale-to-zero, not a broken page. The other four surfaces read Firestore or a committed
+file and are populated the moment the page loads — start there, so the first thing you see is
+the system's memory rather than its idle state.
+
+1. **Belief inspector** — `SUP-042` is prefilled; press *Inspect*. This is the institutional
+   memory: a versioned belief with its provenance, its typed evidence, a confidence that was
+   *computed* rather than asserted, and a supersession chain. Two separate attacks in this repo
+   — a prompt injection (item 27) and a memory-poisoning attempt (item 28) — targeted this exact
+   chain, and it is byte-identical after both.
+2. **Registry panel** — every agent's identity, version, declared tool scope and **standing**.
+   The gateway re-reads this on every single authorization rather than caching it at boot,
+   which is what lets standing move mid-incident and be obeyed on the next request.
+3. **Counterfactual panel** — the A/B measurement of what recall is worth, including the run
+   where it came back **against** the design. It serves a committed artifact rather than
+   re-running, because a button that spent twelve live incidents would answer differently every
+   afternoon. Method and full numbers: [`docs/counterfactual-report.md`](./docs/counterfactual-report.md).
+4. **Wake the fleet on the supply-chain incident.** In the trigger strip set:
+
+   | field | value |
+   |---|---|
+   | target | `SUP-042` |
+   | signal | `compliance_lapse` |
+   | observed | `14` |
+   | token | the token above |
+
+   Press *Wake the fleet* and wait roughly 45 seconds — three sequential `gemini-2.5-pro` calls
+   sit between the trigger and the answer. The Orchestrator classifies the deviation and recalls
+   what memory already believes about this supplier; the Supply-Chain Agent diagnoses *against*
+   that prior belief; the Remediation Planner emits one typed action.
+
+   The incident ends **`HELD`**. That is the design, not a failure: the only supplier-scoped tool
+   available is `DISABLE_COMPLIANCE_CHECKS` against a tier-1 supplier, the deterministic risk
+   table scores it past the hold threshold, and no amount of agent confidence can move a number
+   the table owns. Nothing executed, so — by the rule that memory learns only from what
+   verification could settle — nothing was learned either.
+
+5. **Answer it.** The **approval card** now holds a question addressed to a store operations
+   manager, not to an engineer: what the fleet wants to do, what it found, the risk arithmetic
+   term by term with the threshold it crossed, and who is being asked. Put your name in the
+   approver field and press *Approve* or *Deny*. Either verdict resumes the parked incident on
+   the other side of the gateway and lands a signed row in the ledger; only one of them
+   executes anything.
+
+6. **Read what it left behind.** The gateway ledger shows the signed authorization; the live
+   fleet view shows the reasoning chain as OpenTelemetry spans, each one carrying identifiers,
+   hashes and numbers and never content.
+
+This path mutates nothing and can be run again immediately — by you, or by the next person to
+open the URL. If you would rather drive it with `curl`:
+
+```bash
+URL=https://provenance-808273007560.us-central1.run.app
+TOKEN=f18588110213f0705e4e96bf9ab524cac0e1580f9ac1c58b
+
+curl -sX POST "$URL/trigger" -H 'Content-Type: application/json' -H "X-Provenance-Token: $TOKEN" \
+  -d '{"target":"SUP-042","signal":"compliance_lapse","observed_value":14.0,"observed_at":"2026-08-24T09:15:00Z"}'
+# -> {"outcome":"HELD","approval_id":"...", ...} — the id you need is in the response
+
+curl -s "$URL/approvals"                        # no token needed to read the queue
+
+curl -sX POST "$URL/approvals/<approval_id>" -H 'Content-Type: application/json' \
+  -H "X-Provenance-Token: $TOKEN" -d '{"verdict":"approve","approver":"your.name"}'
+```
+
+A denial is a durable answer: the queue keeps the record as `DENIED` and the ledger keeps the
+signed row. Nothing here needs cleaning up between visitors.
+
+### The self-healing arc (needs a checkout)
+
+The incident that *executes* — detect, roll back, verify, and commit what it learned — needs a
+fault in the world for the fleet to find, and setting one is a Firestore write rather than a
+public endpoint. From a checkout with credentials ([Quickstart](#quickstart) first):
+
+```bash
+GOOGLE_CLOUD_PROJECT=provenance-hackathon .venv/bin/python scripts/inject_fault.py
+# then trigger inventory-api / error_rate / 0.38 — from the page, or the curl in Quickstart
+```
+
+**It is one-shot on purpose.** A successful arc rolls the service back to its known-good config
+and clears the deviation — the fleet fixed it — so the world it started from is gone. Restore
+the fixture with `scripts/seed_firestore.py --reset` before running it again. That is exactly
+why the walkthrough above leads with the supply-chain incident instead: a hold is repeatable,
+and an execution is not.
+
+Every other beat — the injection arc, the poisoning arc, the sweeper, the parked-and-resumed
+approval — has a `verify_*.py` script that checks its own result against the authoritative
+source and exits non-zero on a mismatch. `CLAUDE.md` lists them; each one is named on its
+[`ROADMAP.md`](./ROADMAP.md) item. Demo choreography, beat by beat:
+[`docs/demo-script.md`](./docs/demo-script.md).
 
 ## Tech stack
 
 | Layer | Choice | One-sentence justification |
 |---|---|---|
-| Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst. Gemini 3.5 Pro does not exist — Google's 3.x line is Flash-first and its only Pro-tier entry is a preview model (see `ROADMAP.md` item 1); the model is a config string per role, not a design assumption |
-| Verification | Gemini 3.5 Flash | High-throughput, lower-stakes three-valued verdicts |
+| Verification | **Gemini 3.5 Flash** (`gemini-3.5-flash`, Vertex AI) | The verification judge on every incident: one three-valued verdict against the action's pre-declared success predicate, which is what decides whether memory learns anything at all. High-throughput, lower-stakes — which is why Flash. **This is where the mandatory model requirement is met** (note below) |
+| Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst — four roles on **GA** `gemini-2.5-pro` (note below) |
 | Sanitization | Gemma 4 (`gemma-4-26b-a4b-it-maas`, serverless on Vertex AI) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
 | Inline guardrails | Model Armor | The managed screening service the track brief names; used honestly as a filter, never as the boundary |
 | Orchestration | Google ADK 2.0 | Graph Runtime for workflow routing; Task API for delegation and the parked-on-human-approval resume path |
@@ -274,6 +390,21 @@ non-zero if any is missing or does not match the fixture.
 | Recall index | Vertex AI embeddings | Retrieval nominates candidate beliefs; the store decides what is true |
 | Deployment | Cloud Run | Stood up in Phase 1, not at the end — one service today, split only when a component needs its own scaling profile (`docs/adr/ADR-008`) |
 | Observability | OpenTelemetry → Cloud Trace/Logging | One structured stream every component emits to from day one; the UI, audit log, and counterfactual metrics all read it |
+
+**On the mandatory model requirement.** The hackathon requires Gemini 3.5 or newer. That
+requirement is met by **`gemini-3.5-flash` via Vertex AI — it is the verification judge on every
+incident**, so every run a judge triggers exercises it. The four reasoning roles run GA
+`gemini-2.5-pro` because the 3.x line has no GA Pro: Google shipped 3.x Flash-first, and its only
+Pro-tier entry is a preview model that can change or be withdrawn inside the October 1 judging
+window. `ROADMAP.md` item 1's deviation note has the live catalog probe behind that. Each role is
+a config string in [`provenance/models.py`](./provenance/models.py) and nothing there is an input
+to a deterministic decision — a wrong string makes an agent fail to reason; it cannot make the
+gateway approve anything.
+
+Four Google AI models are integrated in total, each load-bearing: `gemini-3.5-flash`
+(verification), `gemini-2.5-pro` (four reasoning roles), `gemma-4-26b-a4b-it-maas` (the isolated
+sanitizer for untrusted content), and `text-embedding-005` (the recall index, which nominates
+candidate beliefs and decides nothing).
 
 ## Documentation
 
