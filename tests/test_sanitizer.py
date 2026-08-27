@@ -228,6 +228,12 @@ def test_a_full_queue_is_retried_and_then_succeeds() -> None:
     fact = asyncio.run(sanitizer.sanitize(RAW, client=client))
     assert fact.subject == GOOD["subject"]
     assert len(client.calls) == 3
+    # Item 32: the span reports three requests, not one success. This module 429s on roughly
+    # half of its calls, so a constant here would be wrong more often than right -- and the
+    # A/B's `model_calls` column is a count of requests, which is what the retries were.
+    (span,) = [s for s in EXPORTER.get_finished_spans() if s.name == telemetry.SPAN_REASONING_CHAIN]
+    assert span.attributes is not None
+    assert span.attributes["provenance.reasoning.model_calls"] == 3
 
 
 def test_a_full_queue_forever_halts_rather_than_looping() -> None:

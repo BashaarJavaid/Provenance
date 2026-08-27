@@ -210,7 +210,7 @@ async def sanitize(text: str, *, client: Any | None = None) -> SanitizedFact:
         step=STEP,
         recall_belief_ids=(),
     ) as rec:
-        response = await _call(api, text)
+        response, model_calls = await _call(api, text)
         usage = getattr(response, "usage_metadata", None)
         rec.set_result(
             # One extraction, not a choice between competing readings — the honest number,
@@ -221,16 +221,25 @@ async def sanitize(text: str, *, client: Any | None = None) -> SanitizedFact:
             selected_hypothesis="extraction",
             input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
             output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+            model_calls=model_calls,
         )
         return _parse(response.text or "")
 
 
-async def _call(api: Any, text: str) -> Any:
-    """One model call, retried only while the shared queue is full. Bounded, then halts."""
+async def _call(api: Any, text: str) -> tuple[Any, int]:
+    """One model call, retried only while the shared queue is full. Bounded, then halts.
+
+    Returns the response and how many requests it took. Item 32's `model_calls` attribute
+    counts requests, and this module 429s on roughly half of them, so a constant 1 here
+    would be wrong more often than right.
+    """
     for attempt in range(SANITIZE_ATTEMPTS):
         try:
-            return await api.aio.models.generate_content(
-                model=models.SANITIZER, contents=PROMPT.format(text=text)
+            return (
+                await api.aio.models.generate_content(
+                    model=models.SANITIZER, contents=PROMPT.format(text=text)
+                ),
+                attempt + 1,
             )
         except Exception as exc:
             if not _is_queue_full(exc):

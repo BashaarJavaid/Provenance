@@ -149,6 +149,11 @@ ATTR_REASONING_HYPOTHESES_CONSIDERED = "provenance.reasoning.hypotheses_consider
 ATTR_REASONING_SELECTED_HYPOTHESIS = "provenance.reasoning.selected_hypothesis"
 ATTR_REASONING_INPUT_TOKENS = "provenance.reasoning.input_tokens"
 ATTR_REASONING_OUTPUT_TOKENS = "provenance.reasoning.output_tokens"
+# Item 32. Requests to the model inside one step, which is not the same as steps: §7.1's
+# re-plan and any transport retry both land inside a single span. The item's wording asks for
+# "tool calls" and this fleet has none -- every agent is output-schema-constrained and no
+# `LlmAgent` is built with `tools=` -- so the honest count of what a step spent is requests.
+ATTR_REASONING_MODEL_CALLS = "provenance.reasoning.model_calls"
 ATTR_RECALL_BELIEF_IDS = "provenance.recall.belief_ids"
 # Item 16. What the recall index nominated, *before* the store dropped whatever was RETRACTED
 # or UNKNOWN(stale). The first new attribute key since item 2 defined the vocabulary, and it
@@ -570,8 +575,14 @@ class ReasoningRecorder(_Recorder):
         selected_hypothesis: str,
         input_tokens: int,
         output_tokens: int,
+        model_calls: int,
     ) -> None:
-        """`hypotheses_considered` is the metric the item-32 counterfactual A/B reads."""
+        """Three of the four metrics the item-32 counterfactual A/B reads.
+
+        The fourth, wall-clock, is measured by the runner around `run_incident()` rather than
+        taken from these spans: a Cloud Trace read-back lags the run by up to two minutes and
+        the number that matters is the one a person waited through, recall included.
+        """
         # A reasoning chain has no decision outcome to succeed or fail at; it only completes.
         self._finish(
             "COMPLETE",
@@ -580,6 +591,7 @@ class ReasoningRecorder(_Recorder):
                 ATTR_REASONING_SELECTED_HYPOTHESIS: selected_hypothesis,
                 ATTR_REASONING_INPUT_TOKENS: input_tokens,
                 ATTR_REASONING_OUTPUT_TOKENS: output_tokens,
+                ATTR_REASONING_MODEL_CALLS: model_calls,
             },
         )
 

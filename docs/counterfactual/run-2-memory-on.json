@@ -1,0 +1,15 @@
+{
+  "run": 2,
+  "arm": "memory-on",
+  "incident_id": "inc-22c09237fcff",
+  "trace_id": "cf40b9261537885b181c7ca2ea2c12e7",
+  "outcome": "RESOLVED",
+  "belief_version": 2,
+  "wall_clock_s": 55.7,
+  "model_calls": 4,
+  "input_tokens": 2728,
+  "output_tokens": 417,
+  "hypotheses_considered": 2,
+  "selected_hypothesis": "config_regression",
+  "reasoning_spans": 4
+}

@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -66,7 +67,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -88,6 +89,9 @@ from provenance.telemetry import TriggerSignal
 TRIGGER_TOKEN_ENV = "PROVENANCE_TRIGGER_TOKEN"
 
 _SHELL = Path(__file__).parent / "web" / "index.html"
+# Item 32's A/B, measured offline and committed. It ships inside the package rather than
+# beside its raw runs in `docs/` because the Dockerfile copies `provenance/` and nothing else.
+_COUNTERFACTUAL = Path(__file__).parent / "web" / "counterfactual.json"
 _VERSION = version("provenance")
 
 # configure_tracing() returns False without GOOGLE_CLOUD_PROJECT, so tests and local runs
@@ -215,6 +219,23 @@ async def agents() -> list[dict[str, Any]]:
         }
         for record in records
     ]
+
+
+@app.get("/counterfactual")
+async def counterfactual() -> dict[str, Any]:
+    """§8.2's sixth surface, read side (item 32). Unauthenticated, like the other four reads.
+
+    A committed measurement, not a live one. The A/B is twelve real incidents against the real
+    fixture; a route that ran them on request would be a button that spends the credit ceiling
+    `CLAUDE.md` exists to protect, and would answer a different number every time -- which is
+    not what "the A/B table is reproducible from the committed run artifacts" means.
+
+    So this reads a file, and `scripts/verify_counterfactual.py` is what keeps that file
+    honest: it re-derives this table from the per-run artifacts in `docs/counterfactual/` and
+    refuses if the two disagree. The panel and the report are renderings of the same evidence,
+    which is `ADR-021`'s rule applied to a measurement instead of a belief.
+    """
+    return cast(dict[str, Any], json.loads(_COUNTERFACTUAL.read_text()))
 
 
 # §2.1's two hold reasons, keyed by the standing that produces each. `SUSPENDED` is absent on

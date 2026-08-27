@@ -69,7 +69,7 @@ Further conventions:
 - No ML/LLM-based risk scoring — a deliberate constraint (see `docs/adr/ADR-003`), not a gap to fill in later. `risk.BASE` is the only home of `base[action_class]`; a third tool cannot ship without a base score. Don't add a third supplier tool to reach execution — the supply-chain incident ending `HELD` at 11 is the design.
 - PortunusMCP is a library dependency only; all track-facing authorization logic is new code here and must stay visibly so in the commit history (disclosure table in `README.md`, reasoning in `ADR-004`). It installs as a separate `--no-deps` step and **must never go in `pyproject.toml`**. CI must not gate on `pip check`. The Dockerfile's two-step install must stay two steps in that order.
 - Emit spans only through `provenance/telemetry.py` helpers. Don't call the OTel tracer directly, and don't invent a new span shape or a content-bearing attribute key without changing `ARCHITECTURE.md` §8.1 and `tests/test_telemetry_schema.py` together. Attributes carry identifiers, hashes, enums and numbers — never content.
-- `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` and `POST /approvals/{id}` are token-guarded by the **same** `PROVENANCE_TRIGGER_TOKEN` and **fail closed when it is unset** — don't remove either guard, and don't add a second secret. `GET /trace`, `GET /belief/{entity}`, `GET /registry` and `GET /approvals` are unauthenticated on purpose.
+- `/health`, never `/healthz` (Cloud Run swallows the latter). Don't rename an `<h2>` in `provenance/web/index.html`. `POST /trigger` and `POST /approvals/{id}` are token-guarded by the **same** `PROVENANCE_TRIGGER_TOKEN` and **fail closed when it is unset** — don't remove either guard, and don't add a second secret. `GET /trace`, `GET /belief/{entity}`, `GET /registry`, `GET /approvals` and `GET /counterfactual` are unauthenticated on purpose.
 - Deploy at `--max-instances=1` (the trace UI's span buffer is in-process) and `--min-instances=0`. Don't raise either for convenience.
 - No entity document carries a `status` / `confidence` / `belief` field — `SUP-042` is AT_RISK through the belief store, never as a seeded field. `inventory-api` is tier2 and `SUP-042` is tier1 (the only route to the frozen scores 2 and 11); `pricing-api` has no config history on purpose.
 - Reasoning roles run on `gemini-2.5-pro`; verification on `gemini-3.5-flash`; the item-26 sanitizer on `gemma-4-26b-a4b-it-maas`. Gemini 3.5 Pro is not served to this project. Gemini 3.x lives on the **`global`** endpoint.
@@ -90,7 +90,7 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `./scripts/set_budget.sh` — $300 budget, 50/90/100% alerts; already run
 - `./scripts/gcp_setup.sh` — project, APIs, IAM, Firestore, Gemini probe; idempotent. `PROJECT_ID` / `REGION` override defaults
 - `./scripts/deploy.sh` — requires `PROVENANCE_PLANNER_KEY` and `PROVENANCE_TRIGGER_TOKEN`; `--max-instances=1`. Live: https://provenance-808273007560.us-central1.run.app
-- HTTP: `GET /health`, `GET /`, `GET /trace`, `GET /belief/{entity}`; `POST /trigger` (token)
+- HTTP: `GET /health`, `GET /`, `GET /trace`, `GET /belief/{entity}`, `GET /registry`, `GET /approvals`, `GET /counterfactual`; `POST /trigger`, `POST /approvals/{id}` (token)
 
 **Seed** (credentials)
 
@@ -122,8 +122,9 @@ Cheat sheet. Assertions, mutation posture, and Gemini cost live on the named ROA
 - `scripts/verify_sweeper.py` — item 29; writes three scratch beliefs and deletes them; needs the app running (or `PROVENANCE_SERVICE_URL`) for its inspector step; no model calls
 - `scripts/verify_approval_queue.py` — item 30; **writes live registry state** and restores it; default run waits a real 310s parked (`--park-seconds`); `--park-only` / `--resume <id>` run the two halves in two processes, which is the only check of "survives a restart"; teardown imported from `verify_incident_one.py`
 - `scripts/verify_approval_card.py` — item 31; HTTP only, no cloud credentials of its own, no token, mutates nothing; **refuses on an empty queue** — park one first, and answer or delete it afterwards
+- `scripts/verify_counterfactual.py` — item 32; `--record` is the live half (**12 incidents**, writes and restores live state per trial, refuses on a dirty fixture); **no arguments** re-derives the table from the committed artifacts, needs no credentials and is what `tests/test_counterfactual.py` runs in CI
 
-Still to come: `--memory-disabled` counterfactual A/B runner (item 32).
+Phase 11 is closed — item 32 was the last build item, and every §8.2 surface now has a script behind it.
 
 ## Cost ceiling
 
@@ -137,11 +138,13 @@ The GCP project runs on a **$300 free-trial credit and must not exceed it**, and
 
 ## Current phase
 
-Phases 1–10 done. Items 0.5–31 shipped (Aug 26), deployed at `provenance-00021-sqk`. **Item 32 (the `--memory-disabled` A/B counterfactual) is next** — the last build item, and the one that fills the sixth and final §8.2 surface. Item 31's `verify:` line passed with a finding: the reader got §4.2's *rule* ("the score was greater than 7") and none of its *stakes* — see its ROADMAP note before touching the card again. **Item 32 (the `--memory-disabled` A/B counterfactual) is next** — the last build item before the Phase 12 bonus artifacts. Five of §8.2's six surfaces are now filled; only the counterfactual panel still carries a placeholder. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
+Phases 1–11 done. Items 0.5–32 shipped (Aug 26). **The build is finished** — all six §8.2 surfaces are filled and what remains is Phase 12's bonus artifacts and Phases 13–14's submission mechanics. Item 31's `verify:` line passed with a finding: the reader got §4.2's *rule* ("the score was greater than 7") and none of its *stakes* — see its ROADMAP note before touching the card again. Item 32's A/B came back **negative**: recall costs 34% more wall-clock on incident #2 and moves nothing else, because `sre_infra.py`'s own config-regression hint leaves it no headroom. Don't "fix" that by removing the hint — item 18 rejected it once and item 32's note rejects it again, with reasons. See `ROADMAP.md` for the checklist and done notes; load the ADR for the component you touch.
 
 Live traps (would strand the fleet or the demo):
 
 - **Standing belongs to the *proposer*, not `routed_to` — they are routinely different.** The domain agent reasons about an incident and the Planner proposes the action, so a parked record reads `routed_to: supply-chain-agent` alongside `subject: remediation-planner@v3`. The gateway checks standing against the subject; anything deriving a hold reason must read `proposed_by`, never `routed_to`. Item 31 shipped this bug and only the live queue exposed it (`ADR-033`), because a fixture using one agent for both roles passes either way.
+
+- **`verify_counterfactual.py --record` overwrites the committed measurement, and costs twelve live incidents to do it.** The six artifacts in `docs/counterfactual/` are the evidence item 32's `verify:` line reproduces from, and a casual re-run replaces them with a different afternoon's numbers — at which point the report's prose (34%, the non-overlapping ranges) no longer describes its own table, and CI goes red on the mismatch rather than on the prose. Re-record only deliberately, and re-read the report's narrative afterwards. The **default** invocation, with no arguments, is the safe one: it mutates nothing, needs no credentials and is what CI runs.
 
 - **Recovering a deployed secret: use `--format=json` and parse it.** `gcloud run services describe --format="value(...env.filter(...).extract("value"))"` returns a JSON-wrapped string, and feeding that back into `deploy.sh` silently rewrites the live `PROVENANCE_TRIGGER_TOKEN`. It cost two revisions during item 31.
 

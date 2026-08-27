@@ -389,18 +389,27 @@ async def _one_incident(
     private_key: ec.EllipticCurvePrivateKey,
     *,
     expect_version: int = 1,
-) -> tuple[int, str, Any]:
-    """Inject, wake the fleet, read the store back. Returns (failures, trace id, result).
+    memory: bool = True,
+) -> tuple[int, str, Any, float]:
+    """Inject, wake the fleet, read the store back.
+
+    Returns (failures, trace id, result, wall-clock seconds).
 
     Deliberately owns neither the dirty check nor the teardown. `run()` wraps one of these in
     both, exactly as before; item 18's `run_pair()` wraps *two* in one `refuse_if_dirty` and
     one `restore`, because what that item proves is the belief surviving between them.
+
+    `memory` and the elapsed time are item 32's, and both are here rather than in a second
+    incident runner for the reason `verify_refuted.py` imports its teardown: two paths over
+    one fixture drift. The clock wraps `run_incident()` alone -- not the inject, not the
+    store read-back -- because that call is the whole of what a person waits through.
     """
     tracer = trace.get_tracer("provenance.verify_incident_one")
     with tracer.start_as_current_span("provenance.verify_incident_one") as root:
         trace_id = format(root.get_span_context().trace_id, "032x")
         print(f"--> injecting the fault: {TARGET} error_rate -> {SPIKED_ERROR_RATE}")
         inject(sync_client)
+        started = time.monotonic()
         result = await incident.run_incident(
             incident.Trigger(
                 target=TARGET,
@@ -410,7 +419,9 @@ async def _one_incident(
             ),
             client=async_client,
             planner_key=private_key,
+            memory=memory,
         )
+        elapsed = time.monotonic() - started
         # Read the store *before* any restore puts v42 back: this is the only window in
         # which the rolled-back state exists, and it is half the `verify:` line.
         post_failures = check_post_state(sync_client)
@@ -437,7 +448,12 @@ async def _one_incident(
             f"    belief    {result.belief.belief_id} v{result.belief.version} "
             f"{result.belief.outcome} at confidence {result.belief.confidence:.2f}"
         )
-    return check_result(result, expect_version=expect_version) + post_failures, trace_id, result
+    return (
+        check_result(result, expect_version=expect_version) + post_failures,
+        trace_id,
+        result,
+        elapsed,
+    )
 
 
 async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple[int, str, Any]:
@@ -448,7 +464,8 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
     if refuse_if_dirty(sync_client):
         return 1, "", None
     try:
-        return await _one_incident(sync_client, async_client, private_key)
+        failures, trace_id, result, _ = await _one_incident(sync_client, async_client, private_key)
+        return failures, trace_id, result
     finally:
         # Any exit path, including an exception or a Ctrl-C mid-incident (item 8). Item 10
         # widened it: the fleet now writes three service fields and a belief.
@@ -479,7 +496,7 @@ async def run_pair(
     failures = 0
     try:
         print("\n=== incident #1: a cold case, no memory " + "=" * 32)
-        first, _, _ = await _one_incident(sync_client, async_client, private_key)
+        first, _, _, _ = await _one_incident(sync_client, async_client, private_key)
         failures += first
 
         # Not `restore()`: the belief and the ledger record survive into the next incident.
@@ -487,7 +504,7 @@ async def run_pair(
         restore_service(sync_client)
 
         print("\n=== incident #2: the fleet remembers " + "=" * 35)
-        second, trace_id, result = await _one_incident(
+        second, trace_id, result, _ = await _one_incident(
             sync_client, async_client, private_key, expect_version=2
         )
         failures += second

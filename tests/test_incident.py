@@ -21,6 +21,7 @@ express one.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import asdict, replace
@@ -110,6 +111,23 @@ class FakeLlm(BaseLlm):
             usage_metadata=types.GenerateContentResponseUsageMetadata(
                 prompt_token_count=1200, candidates_token_count=90
             ),
+        )
+
+
+class FakeLlmWithoutUsage(FakeLlm):
+    """Replies the same way, but reports no `usage_metadata` (item 32).
+
+    Vertex omits it on some responses. A request is a request whether or not its cost came
+    back, so the call counter must not be gated on the token block.
+    """
+
+    async def generate_content_async(
+        self, llm_request: LlmRequest, stream: bool = False
+    ) -> AsyncGenerator[LlmResponse, None]:
+        self.prompts.append(str(llm_request.config.system_instruction))
+        yield LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text=self.replies.pop(0))]),
+            usage_metadata=None,
         )
 
 
@@ -237,9 +255,11 @@ def run(
     now: datetime | None = None,
     embed: Any | None = None,
     trigger: incident.Trigger | None = None,
+    memory: bool = True,
+    model: BaseLlm | None = None,
 ) -> incident.IncidentResult:
     """One incident, with every model call answered from `replies` in order."""
-    model = FakeLlm(model="fake-model", replies=list(replies), prompts=[])
+    model = model or FakeLlm(model="fake-model", replies=list(replies), prompts=[])
     return asyncio.run(
         incident.run_incident(
             trigger or a_trigger(),
@@ -251,6 +271,7 @@ def run(
             model_domain=model,
             model_planner=model,
             model_verification=model,
+            memory=memory,
         )
     )
 
@@ -323,6 +344,74 @@ def test_each_reasoning_step_emits_one_chain_span(spans: InMemorySpanExporter) -
     assert chains[2].attributes is not None
     assert chains[2].attributes["provenance.agent.version"] == "v3"
     assert chains[2].attributes["provenance.reasoning.input_tokens"] == 1200
+
+
+# --- item 32: what the counterfactual A/B measures, and the switch it measures across ------
+
+
+def test_a_response_without_usage_metadata_still_counts_as_a_model_call(
+    spans: InMemorySpanExporter,
+) -> None:
+    """The count is of requests, not of responses that priced themselves.
+
+    Gated on the token block, this would under-report exactly the responses whose tokens are
+    already missing -- so the arm that happened to draw more of them would look cheaper, and
+    the A/B would be measuring Vertex's reporting rather than the fleet's work.
+    """
+    replies = a_clean_run()
+    model = FakeLlmWithoutUsage(model="fake-model", replies=list(replies), prompts=[])
+    run(replies, model=model)
+
+    chains = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_REASONING_CHAIN]
+    assert len(chains) == 4
+    for chain in chains:
+        assert chain.attributes is not None
+        assert chain.attributes["provenance.reasoning.model_calls"] == 1
+        assert chain.attributes["provenance.reasoning.input_tokens"] == 0
+        assert chain.attributes["provenance.reasoning.output_tokens"] == 0
+
+
+def test_memory_disabled_hides_the_belief_from_reasoning_but_still_commits(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Item 32's ablation moves one variable: the loop stops *reading* memory, not writing it.
+
+    Both halves are the assertion. The empty recall alone would also pass on a run that had
+    disabled memory entirely, and an arm that skipped the commit would differ from the other
+    in two places at once -- which is a comparison the table could not attribute to recall.
+    """
+    # The shipped default, pinned here rather than through `run()`, which forwards the flag
+    # explicitly and so cannot see a change to it. Recall being on is the fleet's posture; a
+    # default of False would be a fleet that silently never remembers, and green.
+    assert inspect.signature(incident.run_incident).parameters["memory"].default is True
+
+    store = a_store()
+    seeded = run(a_clean_run(), store=store)
+    assert seeded.belief is not None and seeded.belief.version == 1
+
+    later = datetime.now(UTC) + timedelta(hours=1)
+    warm = run(
+        a_clean_run(),
+        store=store,
+        now=later,
+        trigger=a_trigger(observed_at=later.isoformat().replace("+00:00", "Z")),
+        memory=False,
+    )
+
+    chains = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_REASONING_CHAIN]
+    assert len(chains) == 8
+    for chain in chains[4:]:
+        assert chain.attributes is not None
+        assert chain.attributes["provenance.recall.belief_ids"] == ()
+        assert chain.attributes["provenance.recall.nominated_ids"] == ()
+
+    # The belief was there the whole time, and the commit found it without recall's help.
+    assert warm.belief is not None
+    assert warm.belief.outcome == "COMMIT"
+    assert warm.belief.version == 2
+    belief_spans = [s for s in spans.get_finished_spans() if s.name == telemetry.SPAN_BELIEF_COMMIT]
+    assert belief_spans[-1].attributes is not None
+    assert belief_spans[-1].attributes["provenance.belief.supersedes"] == 1
 
 
 # --- §7.1: the control loop owns the count ------------------------------------------------

@@ -1,0 +1,666 @@
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:19:07.594142 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+Direct use of automatic function calling (AFC) in AsyncModels.generate_content is not recommended. Instead, we recommend to use AFC in AsyncChat.send_message. Similarly, direct use of AFC in AsyncModels.generate_content_stream is not recommended. Instead, we recommend to use AFC in AsyncChat.send_message_stream.
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:19:19.266689 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:19:19.269194 1106612 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:19:19.269225 1106612 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:19:25.175550 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:19:25.177639 1106777 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:19:25.177675 1106777 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:19:37.309013 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:19:37.311454 1106995 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:19:37.311489 1106995 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:19:37.311490 1106995 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:19:51.123066 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:19:57.365298 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:19:57.367910 1107394 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:19:57.367998 1107394 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:19:57.368007 1107394 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:20:09.078062 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:20:16.541452 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:20:16.543729 1107789 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:20:16.543758 1107789 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:20:16.543759 1107789 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:20:29.413277 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:20:29.416049 1108056 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:20:29.416084 1108056 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:20:29.416085 1108056 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:20:43.843701 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:20:43.846080 1108307 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:20:43.846132 1108307 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+I0826 16:20:43.846133 1108307 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:20:51.331294 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:20:51.339314 1108478 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+
+=== run 1 · memory-on · seeding incident #1 (cold) ======================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-ec2579cc6282 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 0c8c9afaf84d5554  The deployed config version for inventory-api is v41 and its error rate is below 0.05 over the last 5 minutes.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v1 COMMIT at confidence 0.60
+
+--> re-injecting the same deviation, leaving memory in place
+
+=== run 1 · memory-on · MEASURED incident #2 ===========================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-e3b7564ef8ea -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 65f17544778744cf  Within 5 minutes, the deployed config version for inventory-api is v41 and the service-level error rate is less than 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v2 COMMIT at confidence 0.60
+
+--> restoring: v42, nominal error rate, fault off, belief and ledger deleted
+
+--> reading trace ad707157833b9073d8971fe719d41404 back for the span-borne metrics
+    10 span(s) after 10s…
+    22 span(s) after 20s…
+    30 span(s) after 30s…
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:21:29.552753 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:21:30.064516 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:21:30.066593 1109062 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:21:30.066628 1109062 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:21:32.837567 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:21:32.840287 1109197 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:21:32.840339 1109197 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:21:32.840340 1109197 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:21:32.840341 1109197 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:21:44.445266 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:21:44.447813 1109462 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:21:50.731735 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:22:02.142249 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:22:02.144707 1109867 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:22:02.144795 1109867 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:22:02.144798 1109867 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:22:02.144800 1109867 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:22:21.000449 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:22:21.002840 1110297 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:22:21.002887 1110297 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:22:21.002888 1110297 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:22:21.002889 1110297 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:22:26.044982 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:22:26.047486 1110470 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:22:26.047534 1110470 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:22:26.047536 1110470 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:22:26.047536 1110470 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:22:32.977727 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:22:32.980517 1110619 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:22:32.980628 1110619 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:22:32.980676 1110619 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:22:32.980679 1110619 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:22:49.580257 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:22:49.583084 1110955 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:22:49.583216 1110955 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:22:49.583225 1110955 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:22:49.583225 1110955 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:23:02.377837 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:23:10.009260 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:23:10.016832 1111416 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:23:10.017002 1111416 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:23:10.017025 1111416 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:23:10.017026 1111416 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+    measured  52.3s · 4 model calls · 2711+393 tokens · 2 hypotheses (config_regression)
+    wrote     docs/counterfactual/run-1-memory-on.json
+
+=== run 1 · memory-off · seeding incident #1 (cold) ======================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-d4c1812c3e29 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate a259e8d8957cd622  Within 5 minutes, the error rate of inventory-api is below 0.015 and its deployed config version is v41.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v1 COMMIT at confidence 0.60
+
+--> re-injecting the same deviation, leaving memory in place
+
+=== run 1 · memory-off · MEASURED incident #2 ===========================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-438d854c0ff0 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 5e8467bbc68fe58d  Within 5 minutes, the deployed config version for inventory-api is v41 and its error rate is below 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v2 COMMIT at confidence 0.60
+
+--> restoring: v42, nominal error rate, fault off, belief and ledger deleted
+
+--> reading trace 3aefcd663f64c7cd95d121a3f8fd5490 back for the span-borne metrics
+    10 span(s) after 10s…
+    18 span(s) after 20s…
+    30 span(s) after 30s…
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:23:47.391126 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:23:47.394499 1111945 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:23:47.394547 1111945 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:23:47.394548 1111945 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:23:47.899046 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:23:47.900986 1112029 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:23:47.901082 1112029 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:23:47.901099 1112029 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:23:50.660673 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:23:50.663330 1112159 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:23:50.663562 1112159 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:23:50.663601 1112159 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:23:50.663602 1112159 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:23:50.663603 1112159 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:02.280094 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:24:02.282681 1112389 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:07.469760 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:24:07.472048 1112523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:24:07.472090 1112523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:24:07.472091 1112523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:24:07.472092 1112523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:24:07.472093 1112523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:23.362440 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:24:23.364721 1112772 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:24:23.364762 1112772 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:24:23.364763 1112772 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:24:23.364764 1112772 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:24:23.364765 1112772 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:31.885927 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:24:31.888400 1112950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:24:31.888462 1112950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:24:31.888464 1112950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:24:31.888465 1112950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+I0826 16:24:31.888466 1112950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(19, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:39.599369 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:51.238389 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:24:51.240476 1113523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:24:51.240528 1113523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:24:51.240530 1113523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:24:51.240530 1113523 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:24:58.300355 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:24:58.302993 1113829 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:24:58.303229 1113829 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:24:58.303272 1113829 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:24:58.303275 1113829 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:25:16.192246 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:25:16.194849 1114210 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:25:16.194914 1114210 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:25:16.194929 1114210 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:25:16.194930 1114210 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:25:30.407298 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:25:30.409679 1114486 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:25:30.409813 1114486 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:25:30.409817 1114486 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:25:30.409819 1114486 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:25:36.853994 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+    measured  41.8s · 4 model calls · 2604+369 tokens · 2 hypotheses (config_regression)
+    wrote     docs/counterfactual/run-1-memory-off.json
+
+=== run 2 · memory-on · seeding incident #1 (cold) ======================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-5c7632504cd2 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate ce8feaa909554d63  Within 5 minutes, the deployed configuration version is v41 and the service error rate is less than 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v1 COMMIT at confidence 0.60
+
+--> re-injecting the same deviation, leaving memory in place
+
+=== run 2 · memory-on · MEASURED incident #2 ===========================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-22c09237fcff -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 5e8467bbc68fe58d  Within 5 minutes, the deployed config version for inventory-api is v41 and its error rate is below 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v2 COMMIT at confidence 0.60
+
+--> restoring: v42, nominal error rate, fault off, belief and ledger deleted
+
+--> reading trace cf40b9261537885b181c7ca2ea2c12e7 back for the span-borne metrics
+    10 span(s) after 10s…
+    22 span(s) after 20s…
+    30 span(s) after 30s…
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:26:14.231606 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:26:14.796898 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:26:14.798438 1115668 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:26:14.798556 1115668 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:26:14.798560 1115668 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:26:17.458085 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:26:17.460862 1115780 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:26:17.460900 1115780 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:26:17.460901 1115780 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:26:17.460902 1115780 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:26:17.460903 1115780 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:26:29.207732 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:26:29.209989 1116050 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:26:29.210048 1116050 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:26:29.210080 1116050 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:26:29.210082 1116050 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:26:29.210083 1116050 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:26:36.359819 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:26:36.362135 1116176 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:26:36.362285 1116176 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:26:36.362308 1116176 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:26:36.362309 1116176 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:26:36.362310 1116176 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:26:55.844811 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:26:55.847117 1116479 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:26:55.847263 1116479 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:26:55.847267 1116479 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:26:55.847269 1116479 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(14, generation: 1)
+I0826 16:26:55.847271 1116479 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:27:10.735142 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:27:10.737347 1116746 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:27:10.737514 1116746 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:27:10.737556 1116746 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:27:10.737557 1116746 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:27:15.607052 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:27:15.609892 1116873 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:27:15.610057 1116873 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:27:15.610061 1116873 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:27:15.610063 1116873 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:27:21.613169 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:27:21.616198 1117031 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:27:21.616273 1117031 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:27:21.616274 1117031 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:27:21.616275 1117031 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:27:31.863868 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:27:31.866292 1117227 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:27:31.866334 1117227 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:27:31.866335 1117227 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:27:31.866336 1117227 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:27:50.371844 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:27:50.374195 1117591 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:27:50.374428 1117591 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:27:50.374488 1117591 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:27:50.374491 1117591 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:27:56.852909 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:27:56.860720 1117817 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:27:56.860836 1117817 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:27:56.860838 1117817 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:27:56.860839 1117817 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+    measured  55.7s · 4 model calls · 2728+417 tokens · 2 hypotheses (config_regression)
+    wrote     docs/counterfactual/run-2-memory-on.json
+
+=== run 2 · memory-off · seeding incident #1 (cold) ======================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-11011d2568e4 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 69baff53878537a1  Over the next 5 minutes, the error rate for inventory-api is less than 0.02 and the deployed config version is v41.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v1 COMMIT at confidence 0.60
+
+--> re-injecting the same deviation, leaving memory in place
+
+=== run 2 · memory-off · MEASURED incident #2 ===========================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-ec1123c81428 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 8b64d934c29c8465  Within 5 minutes, the deployed config version for inventory-api is v41 and its error rate is less than 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v2 COMMIT at confidence 0.60
+
+--> restoring: v42, nominal error rate, fault off, belief and ledger deleted
+
+--> reading trace a0fd0d6258d458ede407fa393e689dfd back for the span-borne metrics
+    10 span(s) after 10s…
+    30 span(s) after 20s…
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:28:22.558592 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:28:22.561789 1118263 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:28:22.561971 1118263 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:28:22.561975 1118263 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:28:23.062786 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:28:23.064798 1118349 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:28:23.064946 1118349 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:28:23.064957 1118349 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:28:25.878389 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:28:25.881265 1118454 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:28:25.881396 1118454 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:28:25.881410 1118454 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:28:25.881411 1118454 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:28:25.881412 1118454 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:28:37.170520 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:28:37.173114 1118719 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:28:37.173206 1118719 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:28:37.173220 1118719 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:28:37.173221 1118719 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:28:37.173222 1118719 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:28:43.742634 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:28:43.745395 1118889 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:28:43.745546 1118889 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:28:43.745557 1118889 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:28:43.745558 1118889 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:28:43.745559 1118889 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:28:57.573135 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:28:57.575491 1119114 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:28:57.575569 1119114 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:28:57.575570 1119114 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:28:57.575571 1119114 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:28:57.575572 1119114 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:29:12.033497 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:29:12.036244 1119388 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:29:12.036281 1119388 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:29:12.036282 1119388 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:29:12.036283 1119388 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:29:12.036284 1119388 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:29:17.609612 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:29:17.612259 1119527 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:29:17.612304 1119527 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:29:17.612305 1119527 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:29:17.612306 1119527 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:29:17.612307 1119527 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:29:29.195856 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:29:29.198110 1119826 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:29:29.198244 1119826 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:29:29.198248 1119826 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:29:29.198250 1119826 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:29:29.198252 1119826 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:29:35.971487 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:29:35.974106 1119965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:29:35.974153 1119965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:29:35.974154 1119965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:29:35.974155 1119965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:29:47.757106 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:29:47.760048 1120189 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:29:47.760145 1120189 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:29:47.760155 1120189 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:29:47.760156 1120189 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:01.367862 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:01.370565 1120418 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:30:01.370679 1120418 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:30:01.370682 1120418 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:30:01.370685 1120418 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:08.952225 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:08.960036 1120631 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:30:08.960208 1120631 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:30:08.960211 1120631 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:30:08.960214 1120631 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+    measured  39.0s · 4 model calls · 2566+356 tokens · 2 hypotheses (config_regression)
+    wrote     docs/counterfactual/run-2-memory-off.json
+
+=== run 3 · memory-on · seeding incident #1 (cold) ======================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-51b48fc74e12 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate f0a1c158d974c8fd  Within 5 minutes, the deployed config version is v41 and the service's error rate is below 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v1 COMMIT at confidence 0.60
+
+--> re-injecting the same deviation, leaving memory in place
+
+=== run 3 · memory-on · MEASURED incident #2 ===========================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-2a209685ebf5 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 392c9aad07eb0538  The deployed config version for inventory-api is v41, and its average error rate over the last 5 minutes is less than 0.02.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v2 COMMIT at confidence 0.60
+
+--> restoring: v42, nominal error rate, fault off, belief and ledger deleted
+
+--> reading trace ce89a14195a750dd07694d3d672aa533 back for the span-borne metrics
+    10 span(s) after 10s…
+    30 span(s) after 20s…
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:35.422080 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:35.425449 1120950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:30:35.425596 1120950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:30:35.425599 1120950 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:35.788625 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:35.790775 1121033 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:30:35.790889 1121033 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:30:35.790963 1121033 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:38.369731 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:38.372658 1121174 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:30:38.372688 1121174 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:30:38.372689 1121174 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:30:38.372690 1121174 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:30:38.372691 1121174 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:50.157339 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:50.159924 1121334 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:30:50.160046 1121334 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:30:50.160049 1121334 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:30:50.160051 1121334 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:30:50.160053 1121334 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:30:58.008674 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:30:58.011452 1121522 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:30:58.011599 1121522 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:30:58.011603 1121522 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:31:10.103758 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:31:10.107171 1121763 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:31:10.107238 1121763 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:31:26.022079 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:31:26.024760 1121965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:31:26.024949 1121965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:31:26.024971 1121965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:31:26.024972 1121965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:31:26.024972 1121965 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:31:35.194854 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:31:35.197823 1122147 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:31:35.197950 1122147 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:31:35.197954 1122147 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:31:35.197956 1122147 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:31:35.197958 1122147 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:31:42.443078 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:31:42.445877 1122344 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:31:42.446147 1122344 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:31:42.446250 1122344 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:31:42.446272 1122344 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(22, generation: 1)
+I0826 16:31:42.446274 1122344 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:31:56.980916 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:31:56.983336 1122557 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:31:56.983503 1122557 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:31:56.983548 1122557 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:31:56.983550 1122557 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:32:07.815715 1106394 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:32:07.818426 1122744 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:32:07.818514 1122744 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:32:07.818517 1122744 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:32:07.818518 1122744 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+/Users/bashaarjavaid/Projects/Provenance/.venv/lib/python3.12/site-packages/google/auth/_default.py:113: UserWarning: Your application has authenticated using end user credentials from Google Cloud SDK without a quota project. You might receive a "quota exceeded" or "API not enabled" error. See the following page for troubleshooting: https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. 
+  warnings.warn(_CLOUD_SDK_CREDENTIALS_WARNING)
+I0826 16:32:16.220527 1106076 fork_posix.cc:71] Other threads are currently calling into gRPC, skipping fork() handlers
+I0826 16:32:16.228117 1122930 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(25, generation: 1)
+I0826 16:32:16.228244 1122930 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(8, generation: 1)
+I0826 16:32:16.228277 1122930 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(27, generation: 1)
+I0826 16:32:16.228278 1122930 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(23, generation: 1)
+    measured  49.7s · 4 model calls · 2697+380 tokens · 2 hypotheses (config_regression)
+    wrote     docs/counterfactual/run-3-memory-on.json
+
+=== run 3 · memory-off · seeding incident #1 (cold) ======================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-af41e66dd145 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 5c1b255ea3069be7  The error rate for inventory-api is below 2% and the deployed configuration version is v41, measured over the next 5 minutes.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v1 COMMIT at confidence 0.60
+
+--> re-injecting the same deviation, leaving memory in place
+
+=== run 3 · memory-off · MEASURED incident #2 ===========================
+--> injecting the fault: inventory-api error_rate -> 0.38
+    ok  post-state      v41, error_rate 0.01 (from 0.38)
+    incident inc-24106f6c8dd5 -> RESOLVED
+    action    ROLLBACK_CONFIG(inventory-api)
+    predicate 62a76c98690305a4  Within 5 minutes, the error rate for inventory-api is below 0.02 and the deployed config version is v41.
+    risk      1 + 1 + 0 + 0 = 2 -> APPROVE
+    executed  v42 -> v41  verification CONFIRMED
+    belief    belief-inventory-api v2 COMMIT at confidence 0.60
+
+--> restoring: v42, nominal error rate, fault off, belief and ledger deleted
+
+--> reading trace ae7ed9279655ee518cbf4a13cc455772 back for the span-borne metrics
+    10 span(s) after 10s…
+    30 span(s) after 20s…
+    measured  38.7s · 4 model calls · 2588+373 tokens · 2 hypotheses (config_regression)
+    wrote     docs/counterfactual/run-3-memory-off.json
+
+--> wrote provenance/web/counterfactual.json — 3 runs per arm
+| Metric | memory on | memory off |
+|---|---|---|
+| wall-clock | 52.3 s | 39.0 s |
+| model calls | 4 | 4 |
+| input tokens | 2711 | 2588 |
+| output tokens | 393 | 369 |
+| hypotheses considered *(model-asserted)* | 2 | 2 |
+Paste the block above between the report's table markers, then re-run without
+--record to check the three copies agree.

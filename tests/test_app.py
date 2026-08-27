@@ -14,6 +14,7 @@ import json
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -144,6 +145,7 @@ def test_trace_never_serves_content(buffer: None) -> None:
                 selected_hypothesis="config_regression",
                 input_tokens=10,
                 output_tokens=20,
+                model_calls=1,
             )
         body = client.get("/trace").json()
 
@@ -437,6 +439,22 @@ def agents(monkeypatch: pytest.MonkeyPatch) -> FakeFirestore:
     )
     monkeypatch.setattr(registry, "_default_client", lambda: fake)
     return fake
+
+
+def test_the_counterfactual_panel_serves_the_committed_measurement() -> None:
+    """§8.2's sixth surface (item 32). Unauthenticated, and it runs nothing.
+
+    The route is a file read on purpose: the A/B is twelve real incidents, so a route that
+    executed it per request would spend the credit ceiling and answer differently every time.
+    `scripts/verify_counterfactual.py` is what keeps the file equal to the run artifacts it
+    claims to summarize; this only asserts the route serves that file, unchanged.
+    """
+    with TestClient(app) as client:
+        response = client.get("/counterfactual")
+    assert response.status_code == 200
+    assert response.json() == json.loads(
+        (Path(app_module.__file__).parent / "web" / "counterfactual.json").read_text()
+    )
 
 
 def test_the_registry_panel_is_readable_without_a_token(agents: FakeFirestore) -> None:
