@@ -107,8 +107,8 @@ not at it.
 
 | # | Beat | Budget | On screen | Live or pre-triggered |
 |---|---|---|---|---|
-| 1 | Cold open — the claim | 0:15 | The claim, over the architecture diagram | — |
-| 2 | Incident #1, the fleet acts | 0:40 | Trigger strip → live fleet view filling → gateway ledger → the written belief | **Live.** Press the trigger on camera; narrate over the ~60s run |
+| 1 | Cold open — the gateway refusing | 0:15 | The parked approval card: score **11**, in plain language. Claim narrated over it. Press incident #1's trigger as this starts | **Pre-triggered, still parked.** Not edited-in footage — the live card beat 5 comes back to and denies |
+| 2 | Incident #1, the fleet acts | 0:40 | Live fleet view already filling → gateway ledger → the written belief | **Live**, started under beat 1. The ~60s run overlaps the cold open, so 0:40 covers the back half, not the whole thing |
 | 3 | Incident #2, measured not asserted | 0:20 | Counterfactual panel only | Committed artifact — instant |
 | 4 | Incident #3, the fleet generalizes | 0:30 | The trace showing the class belief reaching the prompt on a never-seen entity, then `ESCALATED` | **Pre-triggered.** Have the completed trace on screen |
 | 5 | The attack, twice | 1:00 | Injection → gateway holds → approval card → deny; then the poisoning attempt → registry panel flipping to `DEGRADED` → the closing `SUP-042` shot | **Mixed.** Incidents pre-triggered; the *deny* and the registry refresh are live and instant |
@@ -121,10 +121,33 @@ Three incidents cannot be filmed live inside 3:40 — each is roughly a minute o
 where "filmed live and unedited" is worth the seconds; the rest show completed traces, which
 is what a trace panel is *for*.
 
+**Why the video opens on the refusal rather than the claim.** The table above ends where the
+spec's arc does, but it no longer *starts* there. The judging Q&A was explicit that the first
+thirty seconds decide whether anything after them gets watched, and a claim read over a static
+architecture diagram is the most skippable opening this project could have — it asks for
+fifteen seconds of trust before showing anything. The held injection is the one shot that
+argues for itself with no setup: a model proposed a dangerous action, deterministic code priced
+it at 11, and a human is being asked in plain language. Nothing is edited in to do this: a park
+does not expire (`ADR-032`), so the card raised before rolling is still open three minutes later
+when beat 5 comes back and denies it live. The cold open is a promise the deny beat keeps, and
+the claim is still narrated — now over the system doing the thing it claims.
+
+**The 0:40 in beat 2 is the back half of the run, not the run.** Incident #1 takes roughly
+sixty seconds of sequential model calls and the shot list sums to exactly 3:40, so those
+seconds cannot be found by adding to the budget — only by starting the clock earlier. Press
+the trigger as beat 1 begins and narrate the claim over the cold open while the fleet fills;
+beat 2 then opens on a graph already in motion and closes on the written belief. It is still
+one continuous live take with nothing cut, which is the property the criteria reward — the
+camera simply joins it late.
+
 ### Before each take
 
 - **Warm the instance.** `min-instances=0` means the first request pays a cold start. Hit
   `/health` before rolling so the trigger press is the only latency on camera.
+- **Park the injection before rolling.** Frame one is the approval card, so the held
+  supply-chain action has to already exist. Trigger it, confirm the card is on `GET /approvals`,
+  and leave it unanswered — beat 5 denies it on camera. A take that starts with an empty queue
+  has no cold open.
 - **Reset the fixture** with `scripts/seed_firestore.py --reset` — incident #1 heals the world
   it started from, so a second take without a reset runs against an already-rolled-back service.
 - **Clear the approval queue after the deny beat.** A denial leaves a `DENIED` record, and
@@ -139,6 +162,12 @@ is what a trace panel is *for*.
   approval card, the registry panel's standing column, and the belief object's computed
   confidence and evidence IDs. At 100% these are unreadable at video bitrates, and they are
   the shots the architecture argument rests on.
+- **Narrate it yourself.** The judging Q&A ruled out AI voice-over explicitly. This is a
+  recording constraint, not a script one, and it is the kind that is only discovered after a
+  take is in the can.
+- **Stop the recording before 4:00.** Nothing after four minutes is watched at all, so an
+  overrun does not cost style points — it deletes the closing claim. The arc is budgeted to
+  land at 3:40 to keep twenty seconds of margin for a slow cold start or a retake's drift.
 - Hard-reloading between takes is no longer required — `GET /` sends `Cache-Control: no-store`
   as of the revision deployed 2026-08-27.
 
