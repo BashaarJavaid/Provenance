@@ -50,6 +50,13 @@ FAULT_INJECTION = "fault_injection"
 # (§2.1 stage 7), and item 30 owns resuming it.
 APPROVING = ("APPROVE", "APPROVE_NOTIFY")
 
+# The action classes this module can actually perform. `risk.BASE` scores two, and only one of
+# them has an executor: `DISABLE_COMPLIANCE_CHECKS` exists to be scored 11 and stopped, which is
+# the design (`ADR-003`), not a gap. Naming that here rather than leaving it implicit in
+# `execute()`'s body gives the approval card something to read -- a card offering "Approve" on
+# an action nothing can carry out asks a human a question whose answer cannot be honoured.
+EXECUTABLE = ("ROLLBACK_CONFIG",)
+
 
 @dataclass(frozen=True)
 class ExecutionResult:
@@ -135,6 +142,11 @@ async def execute(
 ) -> ExecutionResult:
     """Perform one authorized `ROLLBACK_CONFIG`. Raises unless the decision authorizes it."""
     _check_authorization(action_, decision)
+    # Before the first read, so the failure names itself. Without this an approved
+    # `DISABLE_COMPLIANCE_CHECKS` dies on `fault_injection/{supplier}` not existing -- true, but
+    # it reports a missing Firestore document for what is actually a class with no executor.
+    if action_.action_class not in EXECUTABLE:
+        raise ExecutionError(f"no executor for {action_.action_class}")
 
     fault = await _read(FAULT_INJECTION, action_.target, client)
     rollback_fails = bool(fault.get("rollback_fails"))

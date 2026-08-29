@@ -77,6 +77,7 @@ from provenance import (
     action,
     approvals,
     beliefs,
+    executor,
     incident,
     policy,
     registry,
@@ -272,8 +273,17 @@ async def _derived(record: approvals.Approval) -> dict[str, Any]:
     # is gone cannot have its standing read. Both render as "not scored", which is the shape
     # the ledger panel already uses for a decision denied before §4.2.
     except (action.ActionError, registry.AgentNotRegistered):
-        return {"risk": None, "hold_reason": None}
-    return {"risk": asdict(risk.score(validated)), "hold_reason": _HOLD_REASON.get(agent.standing)}
+        return {"risk": None, "hold_reason": None, "executable": False}
+    return {
+        "risk": asdict(risk.score(validated)),
+        "hold_reason": _HOLD_REASON.get(agent.standing),
+        # Whether anything downstream could carry this out if the answer were "approve".
+        # `DISABLE_COMPLIANCE_CHECKS` is scored 11 and has no executor on purpose (`ADR-003`),
+        # so the card must not offer a button whose answer cannot be honoured. It belongs here
+        # rather than in the browser for `risk`'s reason: it is a fact about the backend, not
+        # English for an enum value, and the browser computes nothing (`ADR-033`).
+        "executable": validated.action_class in executor.EXECUTABLE,
+    }
 
 
 @app.get("/approvals")
@@ -285,7 +295,7 @@ async def approval_queue() -> list[dict[str, Any]]:
     it needs off spans, exactly as `/belief` does. Nothing here is a secret: it is a
     description of an action the fleet has *not* taken and may not take without an answer.
 
-    **Item 31 widened it by two derived keys**, `risk` and `hold_reason`, added beside the
+    **Item 31 widened it by derived keys** -- `risk`, `hold_reason` and `executable` -- beside the
     stored fields rather than nesting them, so every reader written before this one still
     parses -- the discipline `approver` took on the ledger. The card needs the §4.2 arithmetic
     component by component and the sentence "held *despite* scoring 2"; the record carries

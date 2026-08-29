@@ -220,6 +220,33 @@ def test_a_decision_about_another_target_does_not_execute() -> None:
     assert store.collections["services"][TARGET]["current_config_version"] == "v42"
 
 
+def test_an_action_class_with_no_executor_names_itself_rather_than_a_missing_document() -> None:
+    """`DISABLE_COMPLIANCE_CHECKS` is scored and stopped; nothing carries it out (`ADR-003`).
+
+    It can still reach here: a HOLD at 11 parks, and a human answering "approve" resumes the
+    incident straight into `execute()`. Before the guard this died on
+    `fault_injection/SUP-042 does not exist` -- true, because the fault switches are per
+    service (`company.FAULT_SWITCHES`) -- which reports a missing Firestore document for what
+    is really a class with no implementation, on the one surface a non-engineer is reading.
+
+    Asserted through the *whole* function rather than on the constant, so removing the guard
+    fails here even though `EXECUTABLE` still lists exactly one class.
+    """
+    store = a_store()
+    dangerous = an_action(
+        action_class="DISABLE_COMPLIANCE_CHECKS",
+        target="SUP-042",
+        target_tier="tier1",
+        blast_radius="org-wide",
+        reversible=False,
+        success_predicate="the compliance gate reports no blocking findings",
+    )
+    with pytest.raises(executor.ExecutionError, match="no executor for DISABLE_COMPLIANCE_CHECKS"):
+        asyncio.run(executor.execute(dangerous, a_decision(dangerous), client=store))
+    # And it stopped before touching anything: §7.3's posture, one line up from the first read.
+    assert store.collections["services"][TARGET]["current_config_version"] == "v42"
+
+
 def test_an_unreachable_store_raises_rather_than_reporting_a_rollback() -> None:
     """§7.3 fail-closed: an execution that did not happen must not be reported as one."""
     store = a_store()

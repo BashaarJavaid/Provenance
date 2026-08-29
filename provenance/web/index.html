@@ -574,7 +574,9 @@
       f(left >= 0 ? "remaining" : "expired",
         left >= 0 ? `${left}d` : `${-left}d ago`, left >= 0 ? "" : "stale") +
       f("on expiry", inForce.on_expiry) +
-      `</div><p>The Staleness Sweeper that consumes this arrives in item 29; nothing acts on it yet.</p>`;
+      `</div><p>The Staleness Sweeper reads this clock on a 300s tick. On expiry it appends a 
+      superseding <code>UNKNOWN</code> version &mdash; never a deletion, nothing here is ever 
+      overwritten &mdash; and recall stops handing the belief over.</p>`;
 
     // Backwards-only links: `supersedes` is stored, `superseded_by` is derived on read from
     // the next version existing (ADR-016). Nothing here was ever written twice.
@@ -682,6 +684,14 @@
 
   function card(a) {
     const p = a.proposal;
+    // Approve is offered only when a resume could honour the answer: the proposal still
+    // validates, the proposer is still an agent whose standing the gateway can read, and
+    // something in this system can actually perform the action class. `heldBecause()` has said
+    // "this cannot be approved" for the first two since item 31 while the button stayed live.
+    // **Deny always renders.** A refusal is signed into the same ledger whatever it would have
+    // cost to carry out, and on a card that cannot be approved it is the only answer that
+    // changes anything.
+    const answerable = a.risk !== null && a.hold_reason !== null && a.executable;
     const rests = a.entity_ids.length
       ? `It rests on what the organization currently believes about ` +
         `<b>${a.entity_ids.map(esc).join("</b>, <b>")}</b>.`
@@ -701,12 +711,20 @@
       // one a model wrote, and while it sat above the risk block it competed with the rows
       // for the reader's attention -- item 31's finding. It is a footnote to the decision,
       // not a reason for it: nothing here is what the risk table read.
-      `<p class="pred">If this is approved, it counts as having worked when: ` +
-      `${esc(p.success_predicate)}</p>` +
+      (a.executable
+        ? `<p class="pred">If this is approved, it counts as having worked when: ` +
+          `${esc(p.success_predicate)}</p>`
+        // The success predicate is what an approval would be measured against, so it has
+        // nothing to say about an action class no code path performs. This replaces it rather
+        // than sitting beside it: two footnotes under the arithmetic is one too many, and item
+        // 31's reader already lost the stakes to a crowded card.
+        : `<p class="pred">Nothing in this system performs <code>${esc(p.action_class)}</code>. ` +
+          `It is in the risk table so it can be scored and stopped &mdash; there is no executor ` +
+          `behind it &mdash; so <b>Deny</b> is the only answer here that changes anything.</p>`) +
       `<form class="inline" onsubmit="return false">` +
       `<label for="f-approver-${esc(a.id)}">your name</label>` +
       `<input id="f-approver-${esc(a.id)}" value="${esc(APPROVER)}">` +
-      `<button data-verdict="approve" data-id="${esc(a.id)}">Approve</button>` +
+      (answerable ? `<button data-verdict="approve" data-id="${esc(a.id)}">Approve</button>` : ``) +
       `<button data-verdict="deny" data-id="${esc(a.id)}">Deny</button>` +
       `<span class="id">${esc(a.id)} · parked ${esc(String(a.parked_at).slice(11, 16))} · ` +
       `answering uses the same token as the trigger above</span>` +

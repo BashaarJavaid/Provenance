@@ -20,7 +20,7 @@ Judging weights: 40% Innovation & Operational Utility, 30% Architectural Discipl
 | Requirement | How this project addresses it |
 |---|---|
 | Agent Registry | A live, load-bearing registry (§9): identity, version, declared tool scope, per-domain memory authority, and a **standing score** the gateway and Memory Policy Engine both read on every request. Not a manifest — a runtime authorization input. Demonstrated by a denial that happens *because of a registry entry* |
-| Runtime (async, long-running) | Two distinct async behaviours: wake-on-event incident handling against a live stream, and a continuously running **Staleness Sweeper** (§8.6) that re-verifies or downgrades expiring beliefs. Plus incidents that park for minutes awaiting human approval and then resume |
+| Runtime (async, long-running) | Two distinct async behaviours: wake-on-event incident handling against a live stream, and a long-running **Staleness Sweeper** (§8.6) that downgrades expiring beliefs to `UNKNOWN` on a 300s tick — continuous in the process, and honestly bounded by `--min-instances=0`, which is a cost posture rather than an oversight. Plus incidents that park for minutes awaiting human approval and then resume |
 | Memory Bank | Versioned institutional belief store — provenance, typed evidence, **computed** confidence, scheduled decay, supersession chain, and first-class retraction |
 | Agent Identity | PortunusMCP identity broker — short-lived per-agent credentials, no shared service accounts (pre-existing; see §17) |
 | Agent Gateway | PortunusMCP zero-trust gateway — RBAC/ABAC, **deterministic** risk scoring, ECDSA-signed audit log. Architecturally the only path from any agent to a state-mutating action (pre-existing; see §17) |
@@ -39,8 +39,9 @@ softened. **Agent Identity / Agent Gateway:** PortunusMCP's own identity broker,
 engine and policy engine are **not** used — it is consumed as a library for `signing`,
 `abac` and `decision` only, and identity resolution, credential minting, the risk table
 and the hold/resume path are new code here (`ADR-004`, `ADR-012`, and `README.md`'s
-disclosure table). **Injection defense:** Model Armor is wired and measured (item 25) but
-nothing calls it yet — the sanitizer that gives it a consumer is item 26.
+disclosure table). **Injection defense:** Model Armor screens every
+inbound payload at `HIGH` (item 25) and the item-26 sanitizer is its consumer — what clears the
+filter is reduced to typed facts by an isolated open model before any frontier model sees it.
 
 *(as built)* **The rules' mandatory model requirement is met by `gemini-3.5-flash` on Vertex
 AI** — it is the verification judge on every incident, so every run a judge triggers exercises

@@ -163,7 +163,7 @@ Full detail, including the assumptions the model rests on, in [`THREAT_MODEL.md`
 
 ```bash
 ./scripts/setup.sh       # PYTHON and VENV override the defaults
-.venv/bin/pytest         # 562 tests, no cloud credentials needed
+.venv/bin/pytest         # 564 tests, no cloud credentials needed
 ```
 
 <details><summary>What that script does, and why it is two installs rather than one</summary>
@@ -196,6 +196,13 @@ Both variables are required since item 9. The Remediation Planner signs its own 
 credential and the registry stores no private halves, so the PEM has to arrive from outside
 the repo; the trigger token guards `POST /trigger`, which spends model tokens on every call
 against a fixed credit.
+
+**The token is a spend gate over a synthetic fixture, not authentication**, which is why it is
+published below and why publishing it costs nothing this project claims. It admits a stranger to
+one serial ~60s incident on a `--max-instances=1` service holding no real data. Agent identity is
+a tier below it and is not shared with anyone: per-request short-lived credentials, ECDSA-signed
+decisions whose `subject` is covered by the signature, and standing re-read from the registry on
+every authorization.
 
 Live: **https://provenance-808273007560.us-central1.run.app** (`/health` for the service
 state). The service is public and runs at `min-instances=0`, so it bills nothing idle.
@@ -234,6 +241,13 @@ why, and the risk score component by component with the reason it stopped. Appro
 there; the token is the one already in the trigger strip above it. Nothing on the card is
 written by a model — the arithmetic comes from the §4.2 lookup table
 (`docs/adr/ADR-033-the-approval-card.md`).
+
+**A card that cannot be approved says so and offers only Deny.** `DISABLE_COMPLIANCE_CHECKS`
+is in the risk table so it can be scored 11 and stopped; nothing in this repo carries it out
+(`docs/adr/ADR-003`), so the supply-chain hold is **deny-only by construction** and the queue
+route says which it is on every record (`executable`). The approve-and-resume half — execute,
+verify, learn, on a fresh clock — runs on a held `ROLLBACK_CONFIG`, which is what
+`scripts/verify_approval_queue.py` drives end to end.
 
 The same thing over HTTP, for a terminal: a held incident's `/trigger` response carries the
 `approval_id` to answer, and `GET /approvals` lists everything waiting (with the risk breakdown
@@ -403,7 +417,7 @@ source and exits non-zero on a mismatch. `CLAUDE.md` lists them; each one is nam
 | Reasoning | Gemini 2.5 Pro | Orchestration, diagnosis, planning, Memory Analyst — four roles on **GA** `gemini-2.5-pro` (note below) |
 | Sanitization | Gemma 4 (`gemma-4-26b-a4b-it-maas`, serverless on Vertex AI) | Untrusted content is reduced to typed facts by a small, isolated open model — never reaches a frontier model raw |
 | Inline guardrails | Model Armor | The managed screening service the track brief names; used honestly as a filter, never as the boundary |
-| Orchestration | Google ADK 2.0 | Graph Runtime for workflow routing; Task API for delegation and the parked-on-human-approval resume path |
+| Orchestration | Google ADK 2.0 | Graph Runtime for workflow routing across the fleet; the parked-on-human-approval path is **assembled from ADK primitives** — a Firestore-backed queue and a two-node resume graph — because there is no ADK Task API to delegate to ([`ADR-032`](./docs/adr/ADR-032-the-approval-queue.md)) |
 | HTTP surface | FastAPI (already a `google-adk` dependency) | One service serves the gateway and the UI shell; the shell is a single static file with no build step (`docs/adr/ADR-008`) |
 | Identity / gateway | PortunusMCP (library dependency) | RBAC/ABAC primitives and ECDSA signing, consumed like an off-the-shelf auth library; all track-facing authorization logic is new code here |
 | Memory store | Firestore | Entity-keyed reads and append-only versioned writes are exactly what a document store is for |
@@ -499,7 +513,7 @@ provenance/                the package — the fleet and its control plane
 └─ web/index.html          the UI — one static file, no build step (ADR-008)
 
 scripts/                   seed_*.py, verify_*.py (one per ROADMAP item), deploy.sh, setup.sh
-tests/                     562 tests, one file per module; no cloud credentials
+tests/                     564 tests, one file per module; no cloud credentials
 docs/adr/                  one file per decision, including the alternatives declined
 docs/counterfactual/       the raw A/B run artifacts — the evidence, not the report
 ```

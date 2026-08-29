@@ -57,6 +57,8 @@ and fails closed. It emits no span, and **nothing calls it yet**.
    That is the managed service's behaviour and it is disclosed in `THREAT_MODEL.md` rather than
    left for someone to discover.
 
+**Overtaken by item 26: `screen()` has a caller.** The template, the HIGH level and the service's own verdict log are unchanged — what expired is the last clause of the Decision above. `incident.py` screens `Trigger.raw_content` before anything reads it and raises `ingest.ContentBlocked` on a match, and what clears the filter goes to the Gemma sanitizer ([`ADR-028`](./ADR-028-the-gemma-sanitizer-as-built.md)). "Wired on all ingest" is now a claim this repo can make; item 27 is the arc that shows the outer layer leaking anyway.
+
 **Alternatives considered:**
 
 - **Model Armor as the boundary.** Rejected before this ADR existed — `ADR-006` and spec §10
@@ -85,5 +87,6 @@ demo is unaffected; a judge re-running `scripts/verify_model_armor.py` in Septem
 principle see a different verdict on the crafted payload, and the script's failure message
 already says what to do about that.
 
-**Revisit when:** item 26 gives `screen()` a caller, which is when "wired on all ingest"
-becomes a claim this repo can actually make.
+**Revisit when:** a second untrusted-content path appears that `Trigger.raw_content` does not
+cover, or the crafted payload starts matching at HIGH — in which case item 27 is re-scripted
+and `THREAT_MODEL.md` corrected, never the level lowered.

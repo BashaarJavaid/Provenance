@@ -42,6 +42,10 @@ import sys
 
 import httpx
 
+# The one home of "what can actually be carried out" (item 31's finding). Imported rather
+# than restated so a class that grows an executor turns the Approve button on in one place.
+from provenance import executor
+
 DEFAULT_URL = "http://127.0.0.1:8000"
 COMPONENTS = ("base", "criticality", "blast", "irreversibility")
 HOLD_REASONS = ("RISK_THRESHOLD", "STANDING_DEGRADED")
@@ -49,6 +53,7 @@ HOLD_REASONS = ("RISK_THRESHOLD", "STANDING_DEGRADED")
 # so adding a line to the card without widening the route fails here instead of on camera.
 CARD_FIELDS = (
     "id",
+    "executable",
     "parked_at",
     "routed_to",
     "entity_ids",
@@ -116,6 +121,11 @@ def as_prose(card: dict) -> str:
         + ("yes" if proposal["reversible"] else "no — this cannot be taken back"),
         f"      ={risk['score']:<2} held because          {card['hold_reason']}",
     ]
+    if not card["executable"]:
+        lines.append(
+            f"    Nothing performs {proposal['action_class']} — it is scored so it can be"
+            " stopped. Deny is the only answer that changes anything."
+        )
     return "\n".join(lines)
 
 
@@ -155,6 +165,19 @@ def checks(base_url: str) -> None:
         check(
             isinstance(card["entity_ids"], list),
             f"the beliefs the fleet reasoned from are cited: {card['entity_ids'] or 'none'}",
+        )
+        # The card offers Approve only where a resume could honour it. `executor.EXECUTABLE`
+        # is the one home of that fact and the route reads it, so a class that grows an
+        # executor turns the button on here without a second list to keep in step.
+        executable = card["executable"] is True
+        check(
+            executable == (card["proposal"]["action_class"] in executor.EXECUTABLE),
+            f"{card['proposal']['action_class']} is "
+            + (
+                "executable, so the card offers Approve"
+                if executable
+                else "not executable, so the card offers Deny only"
+            ),
         )
 
         risk, reason = card["risk"], card["hold_reason"]
