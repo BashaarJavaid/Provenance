@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 520" width="1140" height="520" role="img" aria-label="Provenance in one line: a signal reaches an ADK agent fleet, whose proposal must pass a deterministic gateway before any action runs; verification judges the result and only a settled verdict is written to governed memory, which is recalled into the next incident. The registry supplies standing to the gateway at request time.">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
+<marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect width="1140" height="520" fill="#ffffff"/>
+
+<text x="40" y="46" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#0f172a">Provenance — an LLM never decides what the organization does,</text>
+<text x="40" y="74" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#0f172a">and never decides what the organization believes.</text>
+
+<!-- the determinism boundary, between the last model and the first decision -->
+<line x1="436" y1="106" x2="436" y2="400" stroke="#be123c" stroke-width="1.5" stroke-dasharray="5 5"/>
+<text x="416" y="126" text-anchor="end" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#64748b" letter-spacing="1.4">PROBABILISTIC — RECOMMENDS</text>
+<text x="456" y="126" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#be123c" letter-spacing="1.4">DETERMINISTIC — DECIDES</text>
+
+<!-- 1. signal -->
+<rect x="40" y="152" width="146" height="88" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="113" y="190" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#0f172a">Signal</text>
+<text x="113" y="214" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">an incident wakes</text>
+<text x="113" y="231" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">the fleet</text>
+<line x1="186" y1="196" x2="222" y2="196" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+<!-- 2. adk fleet -->
+<rect x="228" y="152" width="182" height="88" rx="10" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5"/>
+<text x="319" y="190" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#312e81">ADK agent fleet</text>
+<text x="319" y="214" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#4338ca">diagnose, recall,</text>
+<text x="319" y="231" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#4338ca">propose a typed action</text>
+<line x1="410" y1="196" x2="454" y2="196" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+<!-- 3. gateway -->
+<rect x="460" y="144" width="272" height="104" rx="10" fill="#fffbeb" stroke="#be123c" stroke-width="2"/>
+<text x="596" y="180" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#0f172a">Gateway — the only path</text>
+<text x="596" y="205" text-anchor="middle" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="12" fill="#be123c">risk = base + tier + blast + reversibility</text>
+<text x="596" y="228" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">a lookup table, never a model's number</text>
+<line x1="732" y1="196" x2="770" y2="196" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+<!-- 4. action -->
+<rect x="776" y="152" width="154" height="88" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="853" y="184" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#0f172a">Action</text>
+<text x="853" y="208" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">≤3 runs · 4–6 notifies</text>
+<text x="853" y="225" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">≥7 waits for a human</text>
+<line x1="930" y1="196" x2="966" y2="196" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+<!-- 5. verification -->
+<rect x="972" y="152" width="128" height="88" rx="10" fill="#ecfdf5" stroke="#34d399" stroke-width="1.5"/>
+<text x="1036" y="184" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#047857">Verification</text>
+<text x="1036" y="208" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#047857">confirmed ·</text>
+<text x="1036" y="225" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#047857">refuted · unsettled</text>
+
+<!-- verification down and left into memory -->
+<path d="M 1036 240 L 1036 322 L 950 322" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+<text x="1100" y="352" text-anchor="end" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" fill="#64748b">only a settled verdict</text>
+
+<!-- 6. governed memory -->
+<rect x="700" y="278" width="244" height="104" rx="10" fill="#fdf2f8" stroke="#be123c" stroke-width="2"/>
+<text x="822" y="312" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#0f172a">Governed memory</text>
+<text x="822" y="336" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">append-only · computed confidence</text>
+<text x="822" y="353" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">decay · retraction</text>
+<text x="822" y="371" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" fill="#be123c">the Policy Engine commits, no agent</text>
+
+<!-- memory back into the fleet, routed clear of the registry -->
+<path d="M 700 330 L 660 330 L 660 416 L 319 416 L 319 244" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#g)"/>
+<text x="332" y="408" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" fill="#64748b">recalled into the next incident</text>
+
+<!-- registry, feeding the gateway -->
+<rect x="460" y="278" width="176" height="104" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="548" y="312" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" font-weight="700" fill="#0f172a">Registry</text>
+<text x="548" y="336" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">identity · scope ·</text>
+<text x="548" y="353" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">standing</text>
+<text x="548" y="371" text-anchor="middle" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" fill="#64748b">read on every request</text>
+<line x1="548" y1="278" x2="548" y2="252" stroke="#475569" stroke-width="2" marker-end="url(#a)"/>
+
+<text x="40" y="466" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13.5" fill="#0f172a">The two red boxes are the only things that decide anything, and neither of them is a model.</text>
+<text x="40" y="490" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#64748b">Full architecture, with both pipelines stage by stage: docs/architecture.svg</text>
+</svg>

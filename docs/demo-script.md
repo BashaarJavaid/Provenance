@@ -147,7 +147,9 @@ camera simply joins it late.
 - **Park the injection before rolling.** Frame one is the approval card, so the held
   supply-chain action has to already exist. Trigger it, confirm the card is on `GET /approvals`,
   and leave it unanswered — beat 5 denies it on camera. A take that starts with an empty queue
-  has no cold open.
+  has no cold open. **The card offers only Deny**, which is not a limitation to talk around:
+  nothing performs `DISABLE_COMPLIANCE_CHECKS`, and the card says so under the arithmetic. The
+  approve-and-resume half is a held `ROLLBACK_CONFIG`, not this one.
 - **Reset the fixture** with `scripts/seed_firestore.py --reset` — incident #1 heals the world
   it started from, so a second take without a reset runs against an already-rolled-back service.
 - **Clear the approval queue after the deny beat.** A denial leaves a `DENIED` record, and
@@ -156,6 +158,11 @@ camera simply joins it late.
 - **Do not touch `SUP-042`'s chain or `belief-service.tier2`.** They are permanent demo state
   and the closing shot is that two attacks left them byte-identical. `seed_belief.py` has no
   `--reset` and must not grow one.
+- **Check the decay clock before any take after September 8.** `scripts/reaffirm_demo_beliefs.py`
+  with no arguments reads only and exits non-zero while any of the five permanent beliefs expires
+  before October 8; `--commit` resets them. Run the commit once, in the September 8–15 window —
+  a 30-day clock bought earlier still expires during judging. After it runs, `SUP-042`'s
+  supersession chain shows **three** rows in the closing shot, not two.
 - **One tab.** The service runs at `--max-instances=1` and the trace panel's span buffer is
   in-process; a second tab triggering an incident lands on the same instance and interleaves.
 - **Zoom to 125–150%** for the three close-ups that carry numbers: the risk arithmetic on the

@@ -717,6 +717,9 @@ def test_a_degraded_proposer_is_why_the_card_says_held_despite_scoring_two(
     )
     assert card["risk"]["score"] == 2
     assert card["hold_reason"] == "STANDING_DEGRADED"
+    # The other half of the executor claim: a boring rollback held on standing *can* be
+    # approved, and this is the record whose resume `verify_approval_queue.py` drives.
+    assert card["executable"] is True
 
 
 def test_the_standing_read_is_the_proposers_and_not_the_agent_it_was_routed_to(
@@ -746,6 +749,11 @@ def test_a_good_agent_over_the_threshold_is_held_by_the_score(
 ) -> None:
     card = carded(A_DANGEROUS_PROPOSAL, "sre-infra-agent")
     assert (card["risk"]["score"], card["hold_reason"]) == (11, "RISK_THRESHOLD")
+    # And nothing could carry it out if a human said yes. `DISABLE_COMPLIANCE_CHECKS` is in
+    # `risk.BASE` so it can be scored and stopped; it has no executor, by design (`ADR-003`).
+    # Without this key the card offers an Approve whose answer the resume cannot honour, and
+    # the incident ends `ESCALATED` in front of whoever pressed it.
+    assert card["executable"] is False
 
 
 def test_a_proposal_that_no_longer_validates_is_not_scored_rather_than_a_crash(
@@ -761,12 +769,13 @@ def test_a_proposal_that_no_longer_validates_is_not_scored_rather_than_a_crash(
     card = carded({**A_VALID_PROPOSAL, "target_tier": "tier3"}, "remediation-planner")
     assert card["risk"] is None
     assert card["hold_reason"] is None
+    assert card["executable"] is False
     # The stored half is untouched: the queue still shows what is waiting for a human.
     assert card["id"] == A_PARKED.id
     assert card["state"] == "PARKED"
 
 
-def test_the_two_derived_keys_are_added_beside_the_record_and_replace_nothing(
+def test_the_derived_keys_are_added_beside_the_record_and_replace_nothing(
     carded: Callable[..., dict[str, Any]],
 ) -> None:
     """`approver`'s discipline on the ledger, applied here: additive, so old readers still parse.
@@ -779,7 +788,7 @@ def test_the_two_derived_keys_are_added_beside_the_record_and_replace_nothing(
     # Through JSON, because the record's tuples arrive as lists and the claim is about the
     # wire shape a reader parses, not about the dataclass behind it.
     stored = json.loads(json.dumps(asdict(_parked(A_VALID_PROPOSAL, "remediation-planner"))))
-    assert set(card) - set(stored) == {"risk", "hold_reason"}
+    assert set(card) - set(stored) == {"risk", "hold_reason", "executable"}
     assert {key: card[key] for key in stored} == stored
 
 

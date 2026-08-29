@@ -60,7 +60,7 @@ panel, approval card, counterfactual panel.
 
 Python 3.12, Google ADK 2.0 (Graph Runtime), FastAPI, Firestore, Vertex AI, Cloud Run,
 OpenTelemetry → Cloud Trace. Async throughout. One Cloud Run service at `--max-instances=1`
-and `--min-instances=0`. 562 tests in CI with no cloud credentials, plus a live verification
+and `--min-instances=0`. 564 tests in CI with no cloud credentials, plus a live verification
 script per roadmap item that reads its result back from the authoritative source and exits
 non-zero on a mismatch — claims in this repo are checked by mutating the code and confirming
 the suite goes red, and three items recorded a first mutation attempt that was wrong about
@@ -69,29 +69,27 @@ itself rather than about the tests.
 Full design: `ARCHITECTURE.md`. Every significant decision, including the alternatives that
 were rejected, has its own file in `docs/adr/`.
 
-**On Vertex AI Agent Engine, and why the control plane is not built on it.** Agent Engine's
-managed agent registry, session service and Memory Bank are the obvious home for three of these
-components. Each was evaluated and declined, for reasons recorded at the time:
+**The diagram to paste into the submission is `docs/architecture-simple.svg`** — six boxes and
+one line, readable at a glance: Signal -> ADK fleet -> Gateway -> Action -> Verification ->
+Governed memory, with the Registry feeding the gateway at request time and the determinism
+boundary drawn where it actually falls. The full stage-by-stage version, both pipelines and
+every typed object, stays in the README as `docs/architecture.svg`.
 
-- **The registry** is a mutable runtime authorization input, not a deployment manifest. The
-  gateway re-reads standing on *every* authorization, because a park is exactly the window in
-  which standing moves and an agent suspended mid-incident must be denied on its next request.
-  The demo's poisoning arc *is* a registry field changing under a running incident (`ADR-010`,
-  `ADR-030`).
-- **The session service**, for the parked-approval path: `VertexAiSessionService` requires an
-  Agent Engine, which bills while idle — the one resource category able to drain a fixed $300
-  credit that also has to keep the demo alive through October 1. `SqliteSessionService` writes
-  to a container filesystem Cloud Run discards on scale-to-zero, which a five-minute park at
-  `--min-instances=0` is guaranteed to meet (`ADR-032`).
-- **Memory Bank.** Institutional belief here needs supersession chains, retraction, computed
-  confidence and scheduled expiry — a versioned model of what the organization currently holds
-  true. A similarity-ranked recall store is the wrong abstraction for that, and saying so is the
-  project's premise rather than a workaround (`ADR-001`, `ADR-005`).
+**What the platform does here.** **ADK 2.0**'s Graph Runtime routes every incident and the
+two-node graph an approved resume picks up in; **Vertex AI** serves all four models; **Model Armor** screens every inbound payload
+at HIGH before anything reads it; **Firestore** is the append-only belief store, the registry and
+the approval queue; **Cloud Run** runs the whole service at `--min-instances=0`; **Cloud Trace**
+takes one OpenTelemetry stream that the trace UI, the audit log and the A/B metrics all read
+back. The agent registry is the one component built rather than adopted, because standing is a
+**request-time authorization input** — re-read on every single authorization, since a park is
+exactly the window in which an agent's trustworthiness moves — rather than a deployment
+manifest; Agent Engine's registry, session service and Memory Bank were each evaluated against
+that requirement and the reasoning is recorded in `ADR-010`, `ADR-030`, `ADR-032`, `ADR-001` and
+`ADR-005`.
 
-What is used from the platform earns its place: ADK 2.0, Vertex AI for all four models, Model
-Armor, Cloud Run, Firestore, Cloud Trace. The deliberate part is that no managed component sits
-on the determinism boundary — every deterministic decision is code in this repository, readable
-and testable, which is what makes "no LLM decides" checkable rather than claimed.
+The deliberate part is that no managed component sits on the determinism boundary — every
+deterministic decision is code in this repository, readable and testable, which is what makes
+"no LLM decides" checkable rather than claimed.
 
 ## Google AI models integrated
 
@@ -196,7 +194,14 @@ The ratio is the point: the four pillars judges score — registry, runtime, mem
 
 The README's **Run the demo** section walks a cold visitor through the whole thing with nothing
 but the URL — the trigger token is published there, the supply-chain incident is repeatable and
-mutates nothing, and the approval flow can be completed in the browser. Reproducible spin-up
+mutates nothing, and the approval flow can be completed in the browser. **That published token is
+a constrained demo capability, not authentication, and it is not this project's credential
+story.** It gates *spend* — `POST /trigger` and `POST /approvals/{id}` each cost model tokens
+against a fixed $300 credit — over a synthetic fixture with no real data in it, and the service
+runs `--max-instances=1` with a serial ~60s incident, so the worst a stranger can do is occupy a
+queue. The actual identity work is a tier below it: short-lived per-agent credentials minted per
+request, ECDSA-signed decisions whose `subject` is inside the signature, and a registry whose
+standing the gateway re-reads on every authorization. Reproducible spin-up
 from a clean checkout is the README's **Quickstart**: one install command (two steps, and the
 README explains why), one setup script, one deploy script that checks its own result.
 
@@ -216,4 +221,6 @@ README explains why), one setup script, one deploy script that checks its own re
 - [ ] Hosted URL responds and the approval flow works cold — item 36
 - [ ] Repository public, architecture diagram present (`docs/architecture.svg`, embedded in the
       README)
+- [ ] The submission body uses `docs/architecture-simple.svg`, not the full one — the tall
+      version is for a reader who has already decided to look
 - [ ] Both `docs/blog-draft.md` and `docs/social-draft.md` links updated to the published URLs
