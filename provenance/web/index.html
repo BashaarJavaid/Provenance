@@ -64,6 +64,32 @@
     display: grid; gap: 1rem; margin-top: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
   }
+  /* The registry and the counterfactual are the only two panels that are not `.wide`, and in
+     a 17rem auto-fit grid they fill two of four columns and leave two empty cells beside
+     them. A 34rem floor is two columns at this page's 78rem cap and one on a phone. */
+  .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr)); }
+  /* The page reads as two bands: what memory already holds, then an incident happening. */
+  .band {
+    margin: 2.2rem 0 0; color: var(--dim); opacity: 0.75;
+    font: 11px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  /* The step number and the trust chip are siblings of the <h2>, never inside it: the six
+     headings are pinned byte-for-byte by test_root_serves_the_shell_with_all_six_surfaces. */
+  .hd { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.35rem; }
+  .hd h2 { margin: 0; }
+  .step {
+    font: 11px/1 var(--mono); color: var(--dim); border: 1px solid var(--line);
+    border-radius: 4px; padding: 0.25rem 0.4rem;
+  }
+  /* Which of the three the panel shows, in docs/architecture.svg's colours: green is
+     deterministic code, amber is a model, dim is stored state or an offline measurement. */
+  .chip {
+    font: 10px/1 var(--mono); color: var(--dim); border: 1px solid var(--line);
+    border-radius: 99px; padding: 0.25rem 0.5rem;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .chip.ok { color: var(--ok); border-color: var(--ok); }
+  .chip.warn { color: var(--warn); border-color: var(--warn); }
   section {
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
     padding: 1rem 1.1rem; min-height: 8.5rem;
@@ -77,10 +103,19 @@
   }
 
   /* --- the two filled surfaces --- */
-  .rows { margin-top: 0.9rem; font: 12.5px/1.5 var(--mono); overflow-x: auto; }
+  .rows { margin-top: 0.9rem; font: 14px/1.5 var(--mono); overflow-x: auto; }
   .rows:empty::after {
-    content: "no incident in the buffer — wake the fleet"; color: var(--dim); opacity: 0.75;
+    color: var(--dim); opacity: 0.75;
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  /* Both empty states name where to act rather than reporting a state: these two panels are
+     empty on a cold load by design (min-instances=0, in-process span buffer), and a judge
+     reading them top-to-bottom should be told what fills them, not that nothing has. */
+  .fleet:empty::after {
+    content: "empty until you act — press Wake the fleet above and the reasoning chain streams here live";
+  }
+  .ledger:empty::after {
+    content: "every signed decision lands here — refusals included — once an incident runs";
   }
   .row {
     display: grid; gap: 0 1rem; align-items: baseline; padding: 0.42rem 0;
@@ -90,8 +125,8 @@
   /* Without min-width:0 a grid item refuses to shrink below its content and overlaps the
      next column instead of truncating. The flexible cell is the one allowed to lose text. */
   .row > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .fleet .row { grid-template-columns: 1.2rem 13rem 7.5rem 9rem minmax(0, 1fr) 3.6rem; }
-  .ledger .row { grid-template-columns: 1.2rem 5rem minmax(0, 1fr) auto auto; }
+  .fleet .row { grid-template-columns: 1.2rem 14.5rem 8.5rem 10rem minmax(0, 1fr) 4rem; }
+  .ledger .row { grid-template-columns: 1.2rem 5.6rem minmax(0, 1fr) auto auto; }
   .registry .row { grid-template-columns: minmax(0, 1fr) 2.2rem 5.5rem; }
   .registry .why { display: block; white-space: normal; color: var(--dim); font-size: 11.5px; }
   .counterfactual .row { grid-template-columns: minmax(0, 1fr) 6rem 6rem; }
@@ -109,7 +144,7 @@
   /* --- belief inspector (item 17) --- */
   form.inline { margin-top: 0.9rem; padding: 0.5rem 0.6rem; }
   form.inline input { width: 9rem; }
-  #belief { margin-top: 0.9rem; font: 12.5px/1.6 var(--mono); overflow-x: auto; }
+  #belief { margin-top: 0.9rem; font: 13.5px/1.6 var(--mono); overflow-x: auto; }
   #belief:empty::after {
     content: "no belief at that key"; color: var(--dim); opacity: 0.75;
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
@@ -128,8 +163,8 @@
   .calc .n { text-align: right; }
   .calc .tot > span { border-top: 1px solid var(--line); padding-top: 0.42rem; color: var(--fg); }
   .calc .tot { display: contents; }
-  .ev .row { grid-template-columns: 11rem 14rem 11rem minmax(0, 1fr); }
-  .chain .row { grid-template-columns: 2.2rem 11rem 9rem 5rem minmax(0, 1fr) 9rem; }
+  .ev .row { grid-template-columns: 12rem 15rem 12rem minmax(0, 1fr); }
+  .chain .row { grid-template-columns: 2.4rem 12rem 9.5rem 5rem minmax(0, 1fr) 9.5rem; }
   #belief .now { color: var(--warn); }
   #belief .stale { color: var(--bad); font-weight: 600; }
 
@@ -177,6 +212,9 @@
   #answered.bad { color: var(--bad); }
 
   footer { margin-top: 2rem; color: var(--dim); font-size: 0.8rem; }
+  footer summary { cursor: pointer; font: 11px/1 var(--mono); color: var(--dim);
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  footer details p { margin: 0.7rem 0 0; }
 </style>
 
 <main>
@@ -189,6 +227,38 @@
     and writes what it confirmed into a governed institutional memory. An LLM never decides
     what the organization does, and never decides what the organization believes.
   </p>
+
+  <p class="band">What the fleet believes</p>
+
+  <div class="grid two">
+    <section class="wide">
+      <div class="hd"><span class="step">1</span><h2>Belief inspector</h2>
+        <span class="chip">stored state · computed confidence</span></div>
+      <p>What the organization currently believes about an entity — with the evidence, the
+        computed confidence, and every earlier version it replaced.</p>
+      <form id="lookup" class="inline">
+        <label for="f-entity">entity</label>
+        <input id="f-entity" value="SUP-042">
+        <button type="submit">Inspect</button>
+      </form>
+      <div id="belief"></div>
+    </section>
+    <section>
+      <div class="hd"><span class="step">2</span><h2>Registry panel</h2>
+        <span class="chip">stored state</span></div>
+      <p>Who the fleet trusts right now. Standing is re-read on every request, so a downgrade
+        takes effect on the next action, not the next deploy.</p>
+      <div class="rows registry" id="registry"></div>
+    </section>
+    <section>
+      <div class="hd"><span class="step">3</span><h2>Counterfactual panel</h2>
+        <span class="chip">measured offline</span></div>
+      <p>Is memory worth it? Measured across twelve live incidents — including the result that
+        came back against the design.</p>
+      <div class="rows counterfactual" id="counterfactual"></div>
+      <span class="why" id="counterfactual-note"></span>
+    </section>
+  </div>
 
   <form id="wake">
     <label for="f-target">target</label>
@@ -220,51 +290,40 @@
       (<code>scripts/inject_fault.py</code>).</p>
   </form>
 
+  <p class="band">An incident, live</p>
+
   <div id="incident"></div>
 
   <div class="grid">
     <section class="wide">
-      <h2>Live fleet view</h2>
-      <p>Agents, current state, and which belief each one is reading.</p>
+      <div class="hd"><span class="step">4</span><h2>Live fleet view</h2>
+        <span class="chip warn">model output</span></div>
+      <p>The reasoning chain, streaming: which agent, which model, what it concluded, what it
+        recalled.</p>
       <div class="rows fleet" id="fleet"></div>
     </section>
-    <section class="wide">
-      <h2>Gateway ledger</h2>
-      <p>Every authorization with its risk breakdown by component, signed — denials included.</p>
-      <div class="rows ledger" id="ledger"></div>
-    </section>
-    <section class="wide">
-      <h2>Belief inspector</h2>
-      <p>Evidence, computed confidence and the arithmetic behind it, supersession chain, decay clock.</p>
-      <form id="lookup" class="inline">
-        <label for="f-entity">entity</label>
-        <input id="f-entity" value="SUP-042">
-        <button type="submit">Inspect</button>
-      </form>
-      <div id="belief"></div>
-    </section>
-    <section>
-      <h2>Registry panel</h2>
-      <p>Agent standing, live, so a DEGRADED transition is visible the instant it happens.</p>
-      <div class="rows registry" id="registry"></div>
-    </section>
-    <section class="wide">
-      <h2>Approval card</h2>
-      <p>Every HOLD in plain language for a non-engineer — generated from the risk table, never from a model.</p>
+    <section class="wide" id="approval-card">
+      <div class="hd"><span class="step">5</span><h2>Approval card</h2>
+        <span class="chip ok">deterministic code</span></div>
+      <p>Every held action, in plain language, for a non-engineer. Generated from the risk
+        table — never from a model.</p>
       <!-- Written only by the verdict handler. The poller never touches it, so the answer to
            the question you just answered survives the record leaving the queue. -->
       <div id="answered"></div>
       <div id="approvals"></div>
     </section>
-    <section>
-      <h2>Counterfactual panel</h2>
-      <p>The measured memory-on / memory-off A/B for incident #2.</p>
-      <div class="rows counterfactual" id="counterfactual"></div>
-      <span class="why" id="counterfactual-note"></span>
+    <section class="wide">
+      <div class="hd"><span class="step">6</span><h2>Gateway ledger</h2>
+        <span class="chip ok">deterministic code</span></div>
+      <p>Every decision the gateway signed, with its risk arithmetic — approvals, holds, and
+        denials alike.</p>
+      <div class="rows ledger" id="ledger"></div>
     </section>
   </div>
 
   <footer>
+    <details><summary>How each panel gets its data</summary>
+      <p>
     Six surfaces (<code>ARCHITECTURE.md</code> §8.2). The fleet view and the ledger read
     <code>GET /trace</code> — the same spans exported to Cloud Trace, held in process so they
     render while the incident is still running. The Executor has no row because it emits no
@@ -277,6 +336,8 @@
     The counterfactual panel reads <code>GET /counterfactual</code>, which is a committed
     file and not a live anything: the A/B is twelve real incidents measured offline, and a
     button that re-ran them would answer a different number every time.
+      </p>
+    </details>
   </footer>
 </main>
 
@@ -399,6 +460,9 @@
     button.disabled = true;
     note.className = "";
     note.textContent = "waking the fleet — this takes about a minute; spans appear below as they open.";
+    // The form sits between the two bands, so the surfaces that are about to fill are below
+    // the fold. `block: "nearest"` scrolls the least that puts the incident header on screen.
+    el("incident").scrollIntoView({ behavior: "smooth", block: "nearest" });
     try {
       // Deliberately not awaited before polling starts: POST /trigger blocks for the whole
       // incident (item 9), and the point of this surface is to watch it while it runs.
@@ -415,6 +479,14 @@
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail ? JSON.stringify(body.detail) : response.status);
       note.textContent = `incident ${body.incident_id} finished: ${body.outcome}`;
+      if (body.outcome === "HELD") {
+        note.innerHTML = `incident ${esc(body.incident_id)} finished: <b>HELD</b> — the fleet ` +
+          `is asking a human. <a href="#approval-card">Answer it below</a>.`;
+        // The queue poller is on a 5s tick and the card has to be there to be scrolled to,
+        // so ask for it now rather than waiting out the tick.
+        await approvalCards();
+        setTimeout(() => el("approval-card").scrollIntoView({ behavior: "smooth", block: "nearest" }), 1500);
+      }
     } catch (error) {
       note.className = "bad";
       note.textContent = `trigger failed: ${error.message}`;

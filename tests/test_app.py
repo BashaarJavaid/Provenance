@@ -89,6 +89,18 @@ def test_root_serves_the_shell_with_all_six_surfaces() -> None:
         assert surface in response.text
 
 
+def test_the_shell_numbers_the_surfaces_and_anchors_the_approval_card() -> None:
+    """The step badges are siblings of the <h2>s, never inside them, so the surface names above
+    stay byte-identical; `#approval-card` is the anchor the HELD note links to and the element
+    the trigger handler scrolls to, both by literal string."""
+    with TestClient(app) as client:
+        text = client.get("/").text
+    for step in range(1, 7):
+        assert f'<span class="step">{step}</span>' in text
+    assert 'id="approval-card"' in text
+    assert 'href="#approval-card"' in text
+
+
 def test_the_shell_is_not_cached_between_redeploys() -> None:
     """The shell's JavaScript is inline, so a cached shell is a stale renderer running against
     live routes — item 31's live finding. Every fetch already passes `cache: "no-store"`; this
