@@ -136,6 +136,8 @@
   .ok .dot { color: var(--ok); } .err .dot { color: var(--bad); }
   @keyframes pulse { 50% { opacity: 0.25; } }
   .who { color: var(--fg); } .meta, .rows small { color: var(--dim); }
+  /* Three abbreviations appear in every fleet row and nowhere else on the page. */
+  .legend { display: block; margin-top: 0.6rem; color: var(--dim); font-size: 11.5px; }
   .sum { color: var(--fg); } .sum em { color: var(--dim); font-style: normal; }
   .verdict { font-weight: 600; }
   .verdict.ok { color: var(--ok); } .verdict.err { color: var(--bad); }
@@ -149,11 +151,23 @@
     content: "no belief at that key"; color: var(--dim); opacity: 0.75;
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
   }
-  #belief h3 {
+  #belief h3, #belief summary {
     font: 11px/1 var(--mono); color: var(--dim); text-transform: uppercase;
     letter-spacing: 0.06em; margin: 1.1rem 0 0.5rem; font-weight: 400;
   }
   #belief h3:first-child { margin-top: 0; }
+  /* The two supporting sections collapse; the headline, the arithmetic and the chain do not.
+     `open` in the markup, so nothing is hidden on load and the video never has to click --
+     the disclosure triangle is the only thing saying "supporting detail" here. */
+  #belief summary { cursor: pointer; }
+  /* One generated sentence, in the page's own font rather than the panel's monospace: it is
+     the only thing in #belief a non-engineer is meant to read straight through. Every value
+     in it came from GET /belief/{entity}; nothing here is a model's phrasing. */
+  #belief .lede {
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); margin: 0 0 0.85rem; max-width: 52rem;
+  }
+  #belief .gloss { color: var(--dim); font-size: 11.5px; margin: 0.45rem 0 0; }
   #belief .k { color: var(--dim); }
   #belief .head { display: flex; gap: 0 1.4rem; flex-wrap: wrap; align-items: baseline; }
   /* The arithmetic: one row per distinct source class, then the product it feeds. Fixed
@@ -301,6 +315,9 @@
       <p>The reasoning chain, streaming: which agent, which model, what it concluded, what it
         recalled.</p>
       <div class="rows fleet" id="fleet"></div>
+      <span class="legend">hyp = hypotheses the agent considered (model-asserted) ·
+        tok = input+output tokens · recalled = beliefs memory handed the agent before it
+        reasoned</span>
     </section>
     <section class="wide" id="approval-card">
       <div class="hd"><span class="step">5</span><h2>Approval card</h2>
@@ -528,8 +545,33 @@
     // Two numbers, labelled: the one stored on the immutable version, and §4.3 recomputed as
     // of now. They differ by exactly the decay between them, which is the decay clock doing
     // something rather than being a date on a document.
+    // The one sentence a first-time reader gets. A deterministic template over the payload --
+    // the same technique the approval card's heldBecause() uses, for the same reason: the
+    // plain language has to be as re-derivable as the arithmetic under it. The three branches
+    // are the three things a chain can end in; UNKNOWN and RETRACTED have no live confidence
+    // to quote and must not be phrased as if the organization still believed something.
+    const n = inForce.evidence_ids.length;
+    const lede =
+      inForce.status === "UNKNOWN"
+        ? `The organization <b>no longer holds</b> a current belief about ` +
+          `<b>${esc(b.entity)}</b> &mdash; the last one expired unconfirmed and was ` +
+          `downgraded, never deleted. The full history is below.`
+      : inForce.status === "RETRACTED"
+        ? `The organization <b>retracted</b> its belief about <b>${esc(b.entity)}</b> ` +
+          `&mdash; reality disproved it, and the retraction is kept as a first-class ` +
+          `record below.`
+        : `The organization currently believes <b>${esc(b.entity)}</b> is ` +
+          `<b>${esc(inForce.status)}</b> &mdash; confidence <b>${f3(c.confidence_now)}</b>, ` +
+          `computed from <b>${n} piece${n === 1 ? "" : "s"} of evidence</b>, holding until ` +
+          `<b>${day(inForce.expires_at)}</b> unless re-confirmed.` +
+          (versions.length > 1
+            ? ` This is version <b>${inForce.version}</b> &mdash; it superseded ` +
+              `v${inForce.version - 1} when stronger evidence arrived.`
+            : "");
+
     const drift = c.confidence_now < inForce.confidence ? "now" : "";
     const head =
+      `<p class="lede">${lede}</p>` +
       `<div class="head">` +
       f("belief", b.belief_id) + f("entity", b.entity) + f("domain", b.domain) +
       f("scope", b.scope) +
@@ -546,42 +588,49 @@
       `<span class="k">x 2^(-${r.age_days.toFixed(1)}/${f3(inForce.half_life_days).replace(/\.?0+$/, "")})</span>` +
       `<span class="k">=</span><span class="n">${f3(r.weight)}</span>`).join("");
     const arithmetic =
-      `<h3>Computed confidence &mdash; §4.3, not asserted</h3>` +
+      `<h3>How sure is it? &mdash; computed by formula, never asserted by a model</h3>` +
       `<div class="head">` +
       f("at commit", `${f3(inForce.confidence)}  (${day(inForce.committed_at)})`) +
       f("as of now", f3(c.confidence_now), drift) +
       f("threshold", f3(inForce.threshold)) +
       `</div><div class="calc">${rows}` +
       `<div class="tot"><span>1 &minus; &Pi;(1 &minus; w)</span><span></span><span></span>` +
-      `<span class="k">=</span><span class="n">${f3(c.confidence_now)}</span></div></div>`;
+      `<span class="k">=</span><span class="n">${f3(c.confidence_now)}</span></div></div>` +
+      // §4.3's noisy-OR, in one line. The last clause is item 28's defense stated as
+      // arithmetic rather than as a promise: a 0.00 class leaves the product untouched.
+      `<p class="gloss">each independent source reduces the remaining doubt &mdash; no source ` +
+      `counts twice, and a worthless source (weight 0.00) moves nothing</p>`;
 
     const evidence =
-      `<h3>Evidence &mdash; typed, and re-checkable by a third party</h3><div class="rows ev">` +
+      `<details open><summary>What&rsquo;s the proof? &mdash; each item re-checkable by a ` +
+      `third party</summary><div class="rows ev">` +
       inForce.evidence_ids.map(id => {
         const e = b.evidence[id] || {};
         return `<div class="row"><span class="who">${esc(id)}</span>` +
           `<span class="meta">${esc(e.source_class)}</span>` +
           `<span class="meta">${esc(day(e.observed_at))}</span>` +
           `<span class="sum"><em>${esc(e.verifiable_by)}</em></span></div>`;
-      }).join("") + `</div>`;
+      }).join("") + `</div></details>`;
 
     // §6.5: an organization that cannot tell "we know this is fine" from "we last checked six
     // weeks ago" has a log, not a memory. So an expired clock is reported, not hidden.
     const left = Math.floor((Date.parse(inForce.expires_at) - Date.now()) / 86400000);
     const decay =
-      `<h3>Decay clock</h3><div class="head">` +
+      `<details open><summary>How long does it hold? &mdash; beliefs expire unless ` +
+      `re-confirmed</summary><div class="head">` +
       f("half-life", `${inForce.half_life_days}d`) + f("expires", day(inForce.expires_at)) +
       f(left >= 0 ? "remaining" : "expired",
         left >= 0 ? `${left}d` : `${-left}d ago`, left >= 0 ? "" : "stale") +
       f("on expiry", inForce.on_expiry) +
       `</div><p>The Staleness Sweeper reads this clock on a 300s tick. On expiry it appends a 
       superseding <code>UNKNOWN</code> version &mdash; never a deletion, nothing here is ever 
-      overwritten &mdash; and recall stops handing the belief over.</p>`;
+      overwritten &mdash; and recall stops handing the belief over.</p></details>`;
 
     // Backwards-only links: `supersedes` is stored, `superseded_by` is derived on read from
     // the next version existing (ADR-016). Nothing here was ever written twice.
     const chain =
-      `<h3>Supersession chain &mdash; append-only, ${versions.length} version${versions.length > 1 ? "s" : ""}</h3>` +
+      `<h3>How did it get here? &mdash; every version kept, none ever overwritten ` +
+      `(${versions.length} version${versions.length > 1 ? "s" : ""})</h3>` +
       `<div class="rows chain">` + versions.map(v =>
         `<div class="row ${v.superseded_by ? "" : "ok"}"><span class="dot">#${v.version}</span>` +
         `<span class="meta">${esc(day(v.committed_at))}</span>` +

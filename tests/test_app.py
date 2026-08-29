@@ -110,6 +110,30 @@ def test_the_shell_is_not_cached_between_redeploys() -> None:
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_the_belief_inspector_narrates_itself_from_the_payload() -> None:
+    """The belief panel's plain language is a deterministic template over
+    `GET /belief/{entity}`, the way the approval card's is over `GET /approvals` — nothing
+    here is a model's phrasing. These are the fragments that carry the meaning: the three
+    ways a chain can end, the four headings reworded as the questions they answer, and the
+    noisy-OR gloss whose last clause is item 28's defense stated as arithmetic. A reword
+    that drops one is a panel that stops explaining itself, which is silent otherwise."""
+    with TestClient(app) as client:
+        text = client.get("/").text
+    for sentence in (
+        "The organization currently believes",
+        "The organization <b>no longer holds</b> a current belief about",
+        "The organization <b>retracted</b> its belief about",
+        "How sure is it? &mdash; computed by formula, never asserted by a model",
+        "What&rsquo;s the proof? &mdash; each item re-checkable by a ",
+        "How long does it hold? &mdash; beliefs expire unless ",
+        "How did it get here? &mdash; every version kept, none ever overwritten ",
+        "each independent source reduces the remaining doubt",
+        "a worthless source (weight 0.00) moves nothing",
+        "hyp = hypotheses the agent considered (model-asserted) ·",
+    ):
+        assert sentence in text, sentence
+
+
 # --- GET /trace (item 11) -----------------------------------------------------------------
 
 
