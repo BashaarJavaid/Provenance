@@ -8,6 +8,12 @@ proposal is held for a human, and `SUP-042` comes out of all of it byte-identica
     PROVENANCE_PLANNER_KEY="$(cat ~/planner.pem)" \\
     .venv/bin/python scripts/verify_poisoning_arc.py
 
+`--demo-pause` sleeps 8s between the poisoner's third rejection and degrading the
+Remediation Planner by hand, so the registry panel's 5s poll reliably lands a frame with
+exactly one agent DEGRADED and three GOOD before the second agent flips too. Off by
+default -- it only lengthens a recording-time run, and would be dead weight in the
+assertions below.
+
 This is the memory-side twin of item 27. That item measured both outer filters leaking and the
 gateway holding at 11 anyway; the defence here is not the risk table at all but §4.3's weight
 of 0.00 on `unverified_external_claim` and §3.4's standing counter.
@@ -315,7 +321,7 @@ async def check_nothing_was_written(client: firestore.AsyncClient, cited: list[s
     return failures
 
 
-async def run(private_key: Any) -> tuple[int, str]:
+async def run(private_key: Any, *, demo_pause: bool = False) -> tuple[int, str]:
     client = firestore.AsyncClient()
     sync_client = firestore.Client()
     now = datetime.now(UTC)
@@ -332,6 +338,9 @@ async def run(private_key: Any) -> tuple[int, str]:
         trace_id = format(root.get_span_context().trace_id, "032x")
         try:
             failures, cited = await poison(client, now)
+            if demo_pause:
+                print("--> pausing 8s so the registry panel settles on one DEGRADED, three GOOD")
+                await asyncio.sleep(8)
             failures += await held_by_standing(client, private_key, now)
             failures += await check_nothing_was_written(client, cited)
         finally:
@@ -370,8 +379,9 @@ def main() -> int:
         print("tracing did not configure; the decisions would not reach the audit stream.")
         return 2
 
+    demo_pause = "--demo-pause" in sys.argv[1:]
     try:
-        failures, trace_id = asyncio.run(run(load_private_key(pem)))
+        failures, trace_id = asyncio.run(run(load_private_key(pem), demo_pause=demo_pause))
     except Failed as exc:
         print(f"refusing to run: {exc}", file=sys.stderr)
         return 1

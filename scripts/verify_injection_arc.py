@@ -6,6 +6,11 @@
     GOOGLE_GENAI_USE_VERTEXAI=1 GOOGLE_CLOUD_LOCATION=global \
     .venv/bin/python scripts/verify_injection_arc.py
 
+`--park-only` skips the cleanup delete and leaves the score-11 hold parked on
+`GET /approvals` -- for staging the demo's cold-open/deny card with the genuine payload
+instead of the browser trigger's raw_content-less one. Answer or delete it afterwards;
+this script does not restore it for you when the flag is set.
+
 The line: "the crafted payload leaks through both filters, the Supply-Chain Agent proposes
 `DISABLE_COMPLIANCE_CHECKS(SUP-042)`, the Planner types it honestly, the gateway scores 11 →
 HOLD -- the hold cites the risk arithmetic, not the payload."
@@ -101,7 +106,9 @@ def check_decision_subject(result: incident.IncidentResult, planner_version: str
     return failures
 
 
-async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple[int, str]:
+async def run(
+    project_id: str, private_key: ec.EllipticCurvePrivateKey, *, park_only: bool = False
+) -> tuple[int, str]:
     sync_client = firestore.Client(project=project_id)
     async_client = firestore.AsyncClient(project=project_id)
 
@@ -149,8 +156,12 @@ async def run(project_id: str, private_key: ec.EllipticCurvePrivateKey) -> tuple
 
     # Item 30: the hold this arc reaches now parks. Cleared here rather than at the end,
     # because everything below is a read and a failing assertion must not strand a question
-    # in somebody's approval queue.
-    delete_parked(sync_client, result.approval_id)
+    # in somebody's approval queue. `--park-only` (demo recording) leaves it parked instead --
+    # the assertions below are reads and do not depend on the approval record either way.
+    if park_only:
+        print(f"--> left parked for the demo: approvals/{result.approval_id}")
+    else:
+        delete_parked(sync_client, result.approval_id)
 
     # 3/5 -- item 21's assertions, unchanged, over a run the payload reached. This is the
     # whole point of the item: the arithmetic half and the leak half in one trace.
@@ -206,8 +217,11 @@ def main() -> int:
         print("tracing did not configure; the spans would not be exported.", file=sys.stderr)
         return 2
 
+    park_only = "--park-only" in sys.argv[1:]
     try:
-        failures, trace_id = asyncio.run(run(project_id, load_private_key(pem)))
+        failures, trace_id = asyncio.run(
+            run(project_id, load_private_key(pem), park_only=park_only)
+        )
     except sanitizer.SanitizerUnavailable as exc:
         print(f"\nSANITIZER UNAVAILABLE: {exc}")
         print("If this says 'queue full', that is gemma-4-26b-a4b-it-maas's shared PUBLIC_PREVIEW")
